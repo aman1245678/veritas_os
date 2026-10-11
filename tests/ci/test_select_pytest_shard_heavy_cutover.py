@@ -25,7 +25,9 @@ def test_python312_handoff_retains_all_other_files_once():
     assert set(normal) == set(full) - {Path(module) for module in HEAVY_MODULES}
     assert all(module not in [item.as_posix() for item in normal] for module in HEAVY_MODULES)
     plan = partition_test_files(
-        normal, shard_count=8, historical={}, avoid_duplicate_test_basenames=True
+        normal, shard_count=8,
+        historical={p.as_posix(): 1.0 for p in normal},
+        avoid_duplicate_test_basenames=True,
     )
     assigned = [p for shard in plan for p in shard]
     assert len(assigned) == len(set(assigned)) == len(normal)
