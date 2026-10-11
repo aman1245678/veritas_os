@@ -6,6 +6,8 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
+
+from partition_heavy_pytest_cases import HEAVY_MODULES
 from typing import Iterable, Mapping, Sequence
 
 
@@ -25,6 +27,17 @@ def discover_test_files(roots: Iterable[Path]) -> list[Path]:
             if path.match("test_*.py") or path.match("*_test.py"):
                 discovered.add(path)
     return sorted(discovered, key=lambda path: path.as_posix())
+
+
+def without_pinned_heavy_modules(files: Sequence[Path]) -> list[Path]:
+    """Exclude precisely two frozen modules, or refuse a partial cutover."""
+    names = [path.as_posix() for path in files]
+    if any(names.count(module) != 1 for module in HEAVY_MODULES):
+        raise ValueError("heavy-case cutover requires both pinned modules exactly once")
+    selected = [path for path in files if path.as_posix() not in HEAVY_MODULES]
+    if len(selected) != len(files) - len(HEAVY_MODULES):
+        raise ValueError("inconsistent file-to-case cutover ownership")
+    return selected
 
 
 def load_historical_durations(path: Path) -> dict[str, float]:
@@ -112,6 +125,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--shard-index", type=int, required=True, help="1-based shard")
     parser.add_argument("--shard-count", type=int, required=True)
     parser.add_argument(
+        "--exclude-pinned-heavy-modules",
+        action="store_true",
+        help="exclude exactly two proven heavy-case modules from Python 3.12 file shards",
+    )
+    parser.add_argument(
         "--avoid-duplicate-test-basenames",
         action="store_true",
         help="assign tests with the same filename to separate shards",
@@ -139,6 +157,8 @@ def main() -> int:
 
     try:
         files = discover_test_files(args.roots)
+        if args.exclude_pinned_heavy_modules:
+            files = without_pinned_heavy_modules(files)
         durations = load_historical_durations(args.durations)
         shards = partition_test_files(
             files,
