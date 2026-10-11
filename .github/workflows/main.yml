@@ -516,6 +516,148 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
   # ============================================================
+  # [Tier 1] Python 3.12 heavy-case handoff — fail-closed before execution.
+  # Production execution behavior is unchanged; this guards CI only.
+  # ============================================================
+  heavy-cutover-preflight:
+    name: heavy-case cutover preflight (py3.12)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      PYTHONUNBUFFERED: "1"
+      OPENAI_API_KEY: "DUMMY_FOR_CI"
+      VERITAS_API_KEY: "DUMMY_FOR_CI"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install exact CI requirements
+        run: python -m pip install -r veritas_os/requirements-ci.txt
+      - name: Collect real two-module universe and verify handoff
+        run: |
+          set -euxo pipefail
+          mkdir -p test-reports
+          checkout_sha="$(git rev-parse HEAD)"
+          python -m pytest -q --collect-only -m "not slow" \
+            -p scripts.ci.collect_heavy_cases \
+            --heavy-case-proof-output=test-reports/heavy-case-collection.json \
+            --heavy-case-source-sha="${checkout_sha}" \
+            veritas_os/tests/test_canonical_promotion_live_adapter_dry_run_bind_authorization_gate_review.py \
+            veritas_os/tests/test_canonical_promotion_live_adapter_dry_run_final_bind_authorization_readiness.py
+          python -m scripts.ci.plan_heavy_case_cutover \
+            test-reports/heavy-case-collection.json \
+            --expected-sha="${checkout_sha}" \
+            --output=test-reports/heavy-case-cutover-preflight.json
+      - name: Publish exact-checkout cutover artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-heavy-cutover-source-py312
+          path: |
+            test-reports/heavy-case-collection.json
+            test-reports/heavy-case-cutover-preflight.json
+          if-no-files-found: error
+
+  heavy-case-test:
+    name: heavy-case test (py3.12, shard ${{ matrix.shard }}/8)
+    needs: [lint, governance-smoke, governance-backend-fast, heavy-cutover-preflight]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      max-parallel: 8
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6, 7, 8]
+    env:
+      PYTHONUNBUFFERED: "1"
+      OPENAI_API_KEY: "DUMMY_FOR_CI"
+      VERITAS_API_KEY: "DUMMY_FOR_CI"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install exact CI requirements
+        run: python -m pip install -r veritas_os/requirements-ci.txt
+      - name: Run assigned heavy cases with complete JUnit and coverage
+        run: |
+          set -euxo pipefail
+          mkdir -p test-reports
+          checkout_sha="$(git rev-parse HEAD)"
+          export COVERAGE_FILE=".coverage.heavy.${{ matrix.shard }}"
+          python -m pytest -q -m "not slow" \
+            -p scripts.ci.execute_heavy_cases \
+            --heavy-exec-shard-index="${{ matrix.shard }}" \
+            --heavy-exec-shard-count=8 \
+            --heavy-exec-source-sha="${checkout_sha}" \
+            --heavy-exec-manifest=test-reports/execution-manifest.json \
+            --junitxml=test-reports/pytest.xml --tb=short \
+            --cov=veritas_os \
+            --cov-config=veritas_os/tests/.coveragerc \
+            --cov-report= \
+            --cov-fail-under=0 \
+            veritas_os/tests/test_canonical_promotion_live_adapter_dry_run_bind_authorization_gate_review.py \
+            veritas_os/tests/test_canonical_promotion_live_adapter_dry_run_final_bind_authorization_readiness.py
+      - name: Upload heavy-case execution evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: heavy-case-execution-shard-${{ matrix.shard }}
+          path: |
+            test-reports/execution-manifest.json
+            test-reports/pytest.xml
+          if-no-files-found: warn
+      - name: Upload heavy-case coverage
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-data-3.12-heavy-${{ matrix.shard }}
+          path: .coverage.heavy.${{ matrix.shard }}
+          include-hidden-files: true
+          if-no-files-found: warn
+
+  heavy-case-reconcile:
+    name: heavy-case JUnit complete-reconciliation (py3.12)
+    needs: [heavy-cutover-preflight, heavy-case-test]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install pinned verifier dependency
+        run: python -m pip install pytest==9.0.3
+      - name: Reject any incomplete prerequisite
+        env:
+          PREFLIGHT_RESULT: ${{ needs.heavy-cutover-preflight.result }}
+          HEAVY_RESULT: ${{ needs.heavy-case-test.result }}
+        run: |
+          set -euxo pipefail
+          test "${PREFLIGHT_RESULT}" = success
+          test "${HEAVY_RESULT}" = success
+      - uses: actions/download-artifact@v4
+        with:
+          name: ci-heavy-cutover-source-py312
+          path: test-reports/source
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: heavy-case-execution-shard-*
+          path: test-reports/heavy-execution
+      - name: Prove JUnit/manifest completeness for all heavy cases
+        run: |
+          set -euxo pipefail
+          checkout_sha="$(git rev-parse HEAD)"
+          python -m scripts.ci.validate_heavy_case_junit \
+            test-reports/source/heavy-case-collection.json \
+            test-reports/heavy-execution \
+            --expected-sha="${checkout_sha}"
+
+  # ============================================================
   # [Tier 1] Test matrix
   # The dependency audit remains an independent blocking check. Keep it out of
   # test-lane `needs` so an upstream registry outage cannot suppress test
@@ -523,7 +665,7 @@ jobs:
   # ============================================================
   test:
     name: test (py${{ matrix.python-version }}, shard ${{ matrix.shard }}/${{ matrix.shard-count }})
-    needs: [lint, governance-smoke, governance-backend-fast]
+    needs: [lint, governance-smoke, governance-backend-fast, heavy-cutover-preflight]
     runs-on: ubuntu-latest
     timeout-minutes: 60
 
@@ -610,6 +752,8 @@ jobs:
             # Different test roots contain duplicate module filenames.
             # Keep same-basename modules on separate Python 3.12 shards.
             shard_flags+=(--avoid-duplicate-test-basenames)
+            # Two heavy modules now have exactly-once case owners elsewhere.
+            shard_flags+=(--exclude-pinned-heavy-modules)
           fi
           python scripts/ci/select_pytest_shard.py \
             --shard-index "${{ matrix.shard }}" \
@@ -666,13 +810,13 @@ jobs:
 
   coverage:
     name: coverage (py3.12 combined)
-    needs: test
+    needs: [test, heavy-case-test, heavy-case-reconcile]
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
     env:
       COVERAGE_FAIL_UNDER: "85"
-      PYTEST_SHARD_COUNT: "8"
+      PYTEST_SHARD_COUNT: "16"
 
     steps:
       - name: Checkout
@@ -686,6 +830,7 @@ jobs:
       - name: Install coverage tooling
         run: python -m pip install pytest-cov==6.0.0
 
+      # Require both ordinary (8) and heavy (8) instrumentation artifacts.
       - name: Download Python 3.12 coverage shards
         uses: actions/download-artifact@v4
         with:
@@ -723,7 +868,7 @@ jobs:
   # the combined Python 3.12 coverage gate fails.
   test-result:
     name: test (py${{ matrix.python-version }})
-    needs: [test, coverage]
+    needs: [test, coverage, heavy-case-reconcile]
     if: ${{ always() }}
     runs-on: ubuntu-latest
     timeout-minutes: 2
@@ -738,10 +883,12 @@ jobs:
         env:
           TEST_RESULT: ${{ needs.test.result }}
           COVERAGE_RESULT: ${{ needs.coverage.result }}
+          HEAVY_RESULT: ${{ needs.heavy-case-reconcile.result }}
         run: |
           set -euxo pipefail
           test "${TEST_RESULT}" = "success"
           test "${COVERAGE_RESULT}" = "success"
+          test "${HEAVY_RESULT}" = "success"
 
 
   # ============================================================
