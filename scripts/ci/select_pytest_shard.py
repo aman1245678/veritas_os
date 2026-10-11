@@ -6,12 +6,12 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
+from typing import Iterable, Mapping, Sequence
 
 if __package__:
     from .partition_heavy_pytest_cases import HEAVY_MODULES
 else:
     from partition_heavy_pytest_cases import HEAVY_MODULES
-from typing import Iterable, Mapping, Sequence
 
 
 DEFAULT_ROOTS = (Path("veritas_os/tests"), Path("tests"))
