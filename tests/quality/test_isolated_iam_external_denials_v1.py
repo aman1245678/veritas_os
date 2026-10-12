@@ -33,7 +33,7 @@ def _fixture(tmp_path: Path, monkeypatch) -> tuple[Path, Path]:
         "same_target_container": "123456789abc",
     })
     for name, case, kind, http in [
-        ("deny_02.json", "DENY_02", "TimeoutError", None),
+        ("deny_02.json", "DENY_02", "OSError", None),
         ("deny_03.json", "DENY_03", "TLS_CLIENT_IDENTITY_REJECTED", None),
         ("deny_04.json", "DENY_04", "TARGET_POLICY_403", 403),
     ]:
@@ -71,6 +71,22 @@ def test_forged_network_denial_is_rejected(tmp_path, monkeypatch) -> None:
     folder, db = _fixture(tmp_path, monkeypatch)
     payload = json.loads((folder / "deny_02.json").read_text())
     payload["observed_failure_kind"] = "TCP_CONNECTED"
+    _write(folder, "deny_02.json", payload)
+    with pytest.raises(AssertionError):
+        verify(folder, db, SHA, SHA)
+
+
+@pytest.mark.parametrize("field,value", [
+    ("observed_failure_kind", "TCP_CONNECTED"),
+    ("observed_failure_kind", "ConnectionRefusedError"),
+    ("socket_errno", errno.ECONNREFUSED),
+    ("socket_errno_name", "ECONNREFUSED"),
+    ("target_port", 9443),
+])
+def test_network_denial_tampering_fails_closed(tmp_path, monkeypatch, field, value) -> None:
+    folder, db = _fixture(tmp_path, monkeypatch)
+    payload = json.loads((folder / "deny_02.json").read_text())
+    payload[field] = value
     _write(folder, "deny_02.json", payload)
     with pytest.raises(AssertionError):
         verify(folder, db, SHA, SHA)
