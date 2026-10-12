@@ -46,7 +46,12 @@ def verify(directory: Path, database: Path, source_sha: str, expected_sha: str) 
         assert data["target"] == "/v1/iam/users/contractor-001/roles"
         assert data["observed_http_status"] == http_code
         if case_id == "DENY_02":
+            assert data["observed_failure_kind"] in {"OSError", "TimeoutError", "PermissionError"}
             assert data["socket_errno"] in {errno.ENETUNREACH, errno.EHOSTUNREACH, errno.EACCES, errno.EPERM, errno.ETIMEDOUT}
+            if data["observed_failure_kind"] == "TimeoutError":
+                assert data["socket_errno"] == errno.ETIMEDOUT
+            if data["observed_failure_kind"] == "PermissionError":
+                assert data["socket_errno"] in {errno.EACCES, errno.EPERM}
             assert data["socket_errno_name"] == errno.errorcode[data["socket_errno"]]
             assert data["target_port"] == 8443
             assert isinstance(data["target_ip"], str) and data["target_ip"]
