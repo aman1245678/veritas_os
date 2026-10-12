@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import errno
 import hashlib
 import json
 from pathlib import Path
@@ -45,12 +46,15 @@ def verify(directory: Path, database: Path, source_sha: str, expected_sha: str) 
         assert data["target"] == "/v1/iam/users/contractor-001/roles"
         assert data["observed_http_status"] == http_code
         if case_id == "DENY_02":
-            assert data["observed_failure_kind"] in {
-                "TimeoutError", "OSError", "ConnectionRefusedError",
-                "NetworkUnreachableError", "NoRouteToHostError",
-            }
+            assert data["socket_errno"] in {errno.ENETUNREACH, errno.EHOSTUNREACH, errno.EACCES, errno.EPERM, errno.ETIMEDOUT}
+            assert data["socket_errno_name"] == errno.errorcode[data["socket_errno"]]
+            assert data["target_port"] == 8443
+            assert isinstance(data["target_ip"], str) and data["target_ip"]
         else:
             assert data["observed_failure_kind"] == failure_kind
+            if case_id == "DENY_03":
+                assert data["tls_exception_type"] in {"SSLError", "SSLEOFError", "RemoteDisconnected", "ConnectionResetError"}
+                assert "tls_reason" in data and "tls_errno" in data
         cases.append({"case_id": case_id, "result": "PASS", "denial": data["observed_failure_kind"]})
 
     # Read the target-owned DB directly, not the requester's returned JSON.
