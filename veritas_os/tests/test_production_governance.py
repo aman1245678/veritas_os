@@ -28,6 +28,9 @@ _TEST_API_KEY = "governance-prod-test-key"
 @pytest.fixture()
 def gov_client(tmp_path, monkeypatch):
     """TestClient with isolated governance state."""
+    # These HTTP tests explicitly verify the on-disk file policy and history.
+    # The scheduled Tier 3 CI job otherwise selects the PostgreSQL backend.
+    monkeypatch.setenv("VERITAS_GOVERNANCE_BACKEND", "file")
     monkeypatch.setenv("VERITAS_API_KEY", _TEST_API_KEY)
     # Disable governance RBAC for production-like testing
     monkeypatch.setenv("VERITAS_GOVERNANCE_ENFORCE_RBAC", "0")
@@ -45,8 +48,12 @@ def gov_client(tmp_path, monkeypatch):
 
     history_path = tmp_path / "governance_history.jsonl"
 
+    # Force a new file-backed repository for each case, even if a previous
+    # test configured the cached global provider to use PostgreSQL.
     with patch.object(gov_mod, "_DEFAULT_POLICY_PATH", policy_path), \
-         patch.object(gov_mod, "_HISTORY_PATH", history_path, create=True):
+         patch.object(gov_mod, "_POLICY_HISTORY_PATH", history_path), \
+         patch.object(gov_mod, "_governance_repository_factory", None):
+        assert isinstance(gov_mod._get_repository(), gov_mod.FileGovernanceRepository)
         from veritas_os.api.server import app
 
         client = TestClient(app, raise_server_exceptions=False)
