@@ -1,0 +1,59 @@
+# Measurement only — no changes to existing test matrix or coverage gate.
+name: CI Wallclock Measurement
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "scripts/ci/measure_ci_wallclock.py"
+      - "tests/ci/test_measure_ci_wallclock.py"
+      - ".github/workflows/ci-wallclock-measurement.yml"
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: ci-wallclock-measurement-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  measure:
+    name: read-only pinned CI timing comparison
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      PYTHONUNBUFFERED: "1"
+      GH_ACTIONS_READ_TOKEN: ${{ github.token }}
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install synthetic test dependency
+        run: python -m pip install pytest==9.0.3
+      - name: Test strict pagination, provenance and chronology validators
+        run: |
+          set -euxo pipefail
+          python -m pytest -q tests/ci/test_measure_ci_wallclock.py
+      - name: Compare pinned baseline and candidate GitHub CI runs
+        run: |
+          set -euxo pipefail
+          mkdir -p test-reports
+          python -m scripts.ci.measure_ci_wallclock \
+            --baseline-run-id=38112240623 \
+            --baseline-head-sha=bc2d4251868cbce65c7712d6b6d2572a0044a071 \
+            --candidate-run-id=38121325792 \
+            --candidate-head-sha=da7e4889c12f9e04ea6e33a48966aa51e995936a \
+            --json-output=test-reports/ci-wallclock-comparison.json \
+            --markdown-output=test-reports/ci-wallclock-comparison.md
+      - name: Publish exact-run timing evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-wallclock-measurement
+          path: |
+            test-reports/ci-wallclock-comparison.json
+            test-reports/ci-wallclock-comparison.md
+          if-no-files-found: warn
