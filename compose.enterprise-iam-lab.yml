@@ -1,0 +1,69 @@
+# Disposable, no-host-port, no-cloud-credential infrastructure-only probe.
+# Generated LAB_CERT_DIR / LAB_STATE_DIR are deleted after the run.
+name: ${LAB_PROJECT:?set LAB_PROJECT}
+
+x-probe-common: &probe-common
+  image: python:3.12-alpine
+  user: "${LAB_UID:?}:${LAB_GID:?}"
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
+  working_dir: /app
+  volumes:
+    - ./scripts/enterprise_iam_lab/probe.py:/app/probe.py:ro
+
+services:
+  iam-target:
+    image: python:3.12-alpine
+    user: "${LAB_UID:?}:${LAB_GID:?}"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    working_dir: /app
+    command: ["python", "-u", "/app/target_service.py"]
+    environment:
+      LAB_DB_PATH: /run/lab/state/iam.sqlite3
+      LAB_ALLOW_MUTATIONS: "0"
+    volumes:
+      - ./scripts/enterprise_iam_lab/target_service.py:/app/target_service.py:ro
+      - ${LAB_CERT_DIR:?}/server:/run/lab/certs:ro
+      - ${LAB_STATE_DIR:?}:/run/lab/state
+    networks: [effect_net]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import socket; s=socket.create_connection(('127.0.0.1',8443),timeout=2); s.close()"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+      start_period: 2s
+
+  agent-direct:
+    <<: *probe-common
+    profiles: [probes]
+    command: ["python", "-u", "/app/probe.py", "--mode", "network"]
+    environment:
+      TARGET_IP: "${LAB_TARGET_IP:-127.0.0.1}"
+    networks: [agent_net]
+
+  tls-probe:
+    <<: *probe-common
+    profiles: [probes]
+    command: ["python", "-u", "/app/probe.py", "--mode", "tls"]
+    volumes:
+      - ./scripts/enterprise_iam_lab/probe.py:/app/probe.py:ro
+      - ${LAB_CERT_DIR:?}/public:/run/lab/certs:ro
+    networks: [effect_net]
+
+  unscoped-probe:
+    <<: *probe-common
+    profiles: [probes]
+    command: ["python", "-u", "/app/probe.py", "--mode", "scope"]
+    volumes:
+      - ./scripts/enterprise_iam_lab/probe.py:/app/probe.py:ro
+      - ${LAB_CERT_DIR:?}/unscoped:/run/lab/certs:ro
+    networks: [effect_net]
+
+networks:
+  agent_net:
+    internal: true
+  effect_net:
+    internal: true

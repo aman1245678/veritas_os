@@ -1,0 +1,48 @@
+name: Isolated IAM External Denial Infrastructure V1
+
+on:
+  pull_request:
+    paths:
+      - "compose.enterprise-iam-lab.yml"
+      - "scripts/enterprise_iam_lab/**"
+      - "tests/quality/test_isolated_iam_external_denials_v1.py"
+      - ".github/workflows/isolated-iam-external-denials-v1.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: isolated-iam-external-denials-v1-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  isolated-iam-external-denials:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      PYTHONUNBUFFERED: "1"
+      LAB_REPORT_DIR: artifacts/isolated-enterprise-iam-infra/latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Run strict independent-verifier negative tests
+        run: |
+          python -m pip install pytest==9.0.3
+          python -m pytest -q tests/quality/test_isolated_iam_external_denials_v1.py
+
+      - name: Prove external infrastructure denials in disposable Docker networks
+        run: bash scripts/enterprise_iam_lab/run_infra.sh
+
+      - name: Upload SANITIZED infrastructure-only observations
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: isolated-iam-infra-denials-v1
+          path: artifacts/isolated-enterprise-iam-infra/latest/
+          if-no-files-found: warn
