@@ -350,6 +350,34 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Generate ephemeral Docker smoke credentials
+        # Required Compose secrets are deliberately NOT defaulted in docker-compose.yml.
+        # Generate per-run values rather than leaking real or shared credentials.
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          import os
+          import secrets
+
+          password = secrets.token_urlsafe(32)
+          session = secrets.token_urlsafe(32)
+          for secret in (password, session):
+              print(f"::add-mask::{secret}")
+
+          database_url = f"postgresql://veritas:{password}@postgres:5432/veritas"
+          bff_tokens = json.dumps({session: "admin"}, separators=(",", ":"))
+          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as env_file:
+              env_file.write(f"VERITAS_DB_PASSWORD={password}\n")
+              env_file.write(f"VERITAS_DATABASE_URL={database_url}\n")
+              env_file.write(f"VERITAS_BFF_SESSION_TOKEN={session}\n")
+              env_file.write(f"VERITAS_BFF_AUTH_TOKENS_JSON={bff_tokens}\n")
+          PY
+
+      - name: Validate Docker Compose required variables
+        run: docker compose config --quiet
+
       - name: Build and start services
         run: |
           set -euxo pipefail
