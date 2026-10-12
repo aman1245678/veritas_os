@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import errno
 from pathlib import Path
 
 import pytest
@@ -41,6 +42,8 @@ def _fixture(tmp_path: Path, monkeypatch) -> tuple[Path, Path]:
             "observed_failure_kind": kind, "observed_http_status": http,
             "target": target_service.TARGET_PATH, "production_claim": False,
             "veritas_authorization_exercised": False,
+            **({"socket_errno": errno.ENETUNREACH, "socket_errno_name": "ENETUNREACH", "target_ip": "172.28.0.2", "target_port": 8443} if case == "DENY_02" else {}),
+            **({"tls_exception_type": "SSLEOFError", "tls_reason": "TLSV1_ALERT_CERTIFICATE_REQUIRED", "tls_errno": 8} if case == "DENY_03" else {}),
         })
     return tmp_path, database
 
