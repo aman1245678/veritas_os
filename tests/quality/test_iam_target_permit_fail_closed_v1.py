@@ -32,9 +32,10 @@ def test_scoped_identity_cannot_mutate_without_governed_permit(monkeypatch, tmp_
 
     req = Request()
     module.Handler.do_POST(req)
-    assert req.responses == [(503, "veritas_target_permit_gate_not_integrated")]
+    expected_reason = ("governed_executor_not_integrated" if flag == "0" else "veritas_target_permit_gate_not_integrated")
+    assert req.responses == [(503, expected_reason)]
     with sqlite3.connect(module.DB_PATH) as db:
         assert db.execute("SELECT COUNT(*) FROM grants").fetchone()[0] == 0
         assert db.execute("SELECT status, reason FROM audit").fetchall() == [
-            (503, "veritas_target_permit_gate_not_integrated")
+            (503, expected_reason)
         ]
