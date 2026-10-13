@@ -12,6 +12,10 @@ import pytest
 from veritas_os.policy.native_bind_authorization_consumption import (
     consume_native_bind_authorization,
 )
+from veritas_os.tests.test_native_bind_authorization import (
+    issued,
+    api_risk_source,
+)
 from veritas_os.tests.test_native_bind_authorization_consumption import (
     consumable,
     _store_inputs,
