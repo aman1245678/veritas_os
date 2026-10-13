@@ -60,7 +60,7 @@ class NativeLiveCompatibilityGate(unittest.TestCase):
     def test_iam_target_stays_disabled_by_default(self) -> None:
         tree = ast.parse(TARGET.read_text(encoding="utf-8"))
         # The source must continue to use a fail-closed explicit opt-in.
-        source = ast.get_source_segment(TARGET.read_text(encoding="utf-8"), tree)
+        source = TARGET.read_text(encoding="utf-8")
         self.assertIn('os.getenv("LAB_ALLOW_MUTATIONS", "0") != "1"', source)
 
 
