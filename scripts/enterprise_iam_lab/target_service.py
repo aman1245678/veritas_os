@@ -86,24 +86,11 @@ class Handler(BaseHTTPRequestHandler):
             record(actor, 503, "governed_executor_not_integrated")
             self.respond(503, "governed_executor_not_integrated")
             return
-        try:
-            length = int(self.headers.get("Content-Length", "-1"))
-            if self.path != TARGET_PATH or length < 1 or length > 256:
-                raise ValueError("invalid path/size")
-            payload = json.loads(self.rfile.read(length).decode("utf-8"))
-            if payload != MUTATION_BODY:
-                raise ValueError("invalid mutation")
-        except (ValueError, UnicodeError, json.JSONDecodeError):
-            record(actor, 400, "invalid_mutation")
-            self.respond(400, "invalid_mutation")
-            return
-        try:
-            record(actor, 201, "committed", grant=True)
-        except sqlite3.IntegrityError:
-            record(actor, 409, "duplicate_grant")
-            self.respond(409, "duplicate_grant")
-            return
-        self.respond(201, "committed")
+        # A scoped mTLS credential and an environment toggle do not prove
+        # VERITAS authorization. A target-verifiable one-time permit protocol
+        # is required before any effect may be enabled.
+        record(actor, 503, "veritas_target_permit_gate_not_integrated")
+        self.respond(503, "veritas_target_permit_gate_not_integrated")
 
     def log_message(self, format: str, *args: object) -> None:
         del format, args
