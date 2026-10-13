@@ -86,6 +86,11 @@ class Handler(BaseHTTPRequestHandler):
             record(actor, 503, "governed_executor_not_integrated")
             self.respond(503, "governed_executor_not_integrated")
             return
+        # Mutation toggle is not authority: a target-verifiable one-time
+        # governed permit protocol must be integrated before enabling effects.
+        record(actor, 503, "veritas_target_permit_gate_not_integrated")
+        self.respond(503, "veritas_target_permit_gate_not_integrated")
+        return
         try:
             length = int(self.headers.get("Content-Length", "-1"))
             if self.path != TARGET_PATH or length < 1 or length > 256:
