@@ -93,6 +93,10 @@ def commit_verified_permit(actor: str, payload: dict[str, str], now: datetime) -
                 "INSERT INTO grants(user_id, role) VALUES(?, ?)",
                 (TARGET_USER, "admin"),
             )
+        except sqlite3.IntegrityError:
+            db.rollback()
+            return 409, "duplicate_grant"
+        try:
             receipt = db.execute(
                 "INSERT INTO audit(actor, status, reason) VALUES(?, ?, ?)",
                 (actor, 201, "committed"),
@@ -107,9 +111,9 @@ def commit_verified_permit(actor: str, payload: dict[str, str], now: datetime) -
             )
             db.commit()
             return 201, "committed"
-        except sqlite3.IntegrityError:
+        except sqlite3.Error:
             db.rollback()
-            return 409, "duplicate_grant"
+            raise
 
 
 def _reject_duplicate_json_keys(pairs: list[tuple[str, object]]) -> dict:
