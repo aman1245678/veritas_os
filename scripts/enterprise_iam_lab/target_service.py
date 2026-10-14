@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 import sqlite3
@@ -47,6 +48,16 @@ def init_db() -> None:
             "CREATE TABLE IF NOT EXISTS audit (id INTEGER PRIMARY KEY AUTOINCREMENT,"
             " actor TEXT NOT NULL, status INTEGER NOT NULL, reason TEXT NOT NULL)"
         )
+        db.execute(
+            "CREATE TABLE IF NOT EXISTS permit_consumptions ("
+            " permit_id TEXT PRIMARY KEY,"
+            " authorization_id TEXT UNIQUE NOT NULL,"
+            " execution_intent_id TEXT NOT NULL,"
+            " request_id TEXT NOT NULL,"
+            " actor TEXT NOT NULL,"
+            " audit_id INTEGER UNIQUE NOT NULL,"
+            " consumed_at TEXT NOT NULL)"
+        )
 
 
 def record(actor: str, status: int, reason: str, *, grant: bool = False) -> None:
@@ -60,6 +71,58 @@ def record(actor: str, status: int, reason: str, *, grant: bool = False) -> None
             "INSERT INTO audit(actor, status, reason) VALUES(?, ?, ?)",
             (actor, status, reason),
         )
+
+
+def commit_verified_permit(actor: str, payload: dict[str, str], now: datetime) -> tuple[int, str]:
+    """Atomic, target-owned commit. Caller MUST verify the permit first.
+
+    A duplicate permit or authorization cannot commit a second effect, even
+    with concurrent connections or multiple processes sharing SQLite.
+    """
+    with DB_LOCK, sqlite3.connect(DB_PATH, timeout=10) as db:
+        db.execute("BEGIN IMMEDIATE")
+        replay = db.execute(
+            "SELECT 1 FROM permit_consumptions WHERE permit_id = ? OR authorization_id = ?",
+            (payload["permit_id"], payload["authorization_id"]),
+        ).fetchone()
+        if replay is not None:
+            db.rollback()
+            return 409, "permit_replayed"
+        try:
+            db.execute(
+                "INSERT INTO grants(user_id, role) VALUES(?, ?)",
+                (TARGET_USER, "admin"),
+            )
+        except sqlite3.IntegrityError:
+            db.rollback()
+            return 409, "duplicate_grant"
+        try:
+            receipt = db.execute(
+                "INSERT INTO audit(actor, status, reason) VALUES(?, ?, ?)",
+                (actor, 201, "committed"),
+            )
+            db.execute(
+                "INSERT INTO permit_consumptions("
+                "permit_id, authorization_id, execution_intent_id, request_id,"
+                "actor, audit_id, consumed_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (payload["permit_id"], payload["authorization_id"],
+                 payload["execution_intent_id"], payload["request_id"],
+                 actor, receipt.lastrowid, now.isoformat()),
+            )
+            db.commit()
+            return 201, "committed"
+        except sqlite3.Error:
+            db.rollback()
+            raise
+
+
+def _reject_duplicate_json_keys(pairs: list[tuple[str, object]]) -> dict:
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("duplicate JSON key")
+        result[key] = value
+    return result
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -86,11 +149,61 @@ class Handler(BaseHTTPRequestHandler):
             record(actor, 503, "governed_executor_not_integrated")
             self.respond(503, "governed_executor_not_integrated")
             return
-        # A scoped mTLS credential and an environment toggle do not prove
-        # VERITAS authorization. A target-verifiable one-time permit protocol
-        # is required before any effect may be enabled.
-        record(actor, 503, "veritas_target_permit_gate_not_integrated")
-        self.respond(503, "veritas_target_permit_gate_not_integrated")
+        # Test-only opt-in. A scoped certificate + mutation toggle alone
+        # are NEVER sufficient; the trusted verification key stays target-side.
+        if os.getenv("LAB_TEST_PERMIT_GATE", "0") != "1":
+            record(actor, 503, "veritas_target_permit_gate_not_integrated")
+            self.respond(503, "veritas_target_permit_gate_not_integrated")
+            return
+        try:
+            from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+            from cryptography.hazmat.primitives.serialization import load_pem_public_key
+            from signed_permit import PermitRejected, verify_permit
+
+            key_path = os.environ["LAB_PERMIT_VERIFIER_PEM"]
+            verifier = load_pem_public_key(Path(key_path).read_bytes())
+            if not isinstance(verifier, Ed25519PublicKey):
+                raise ValueError("non-Ed25519 verifier")
+        except (ImportError, KeyError, OSError, ValueError, TypeError):
+            record(actor, 503, "permit_verifier_unavailable")
+            self.respond(503, "permit_verifier_unavailable")
+            return
+        try:
+            length = int(self.headers.get("Content-Length", "-1"))
+            if (self.path != TARGET_PATH or
+                    self.headers.get("Content-Type") != "application/json" or
+                    not 1 <= length <= 8192):
+                raise ValueError("invalid request metadata")
+            raw = self.rfile.read(length)
+            if len(raw) != length:
+                raise ValueError("incomplete request")
+            body = json.loads(raw.decode("utf-8"), object_pairs_hook=_reject_duplicate_json_keys)
+            if (not isinstance(body, dict) or set(body) != {"role", "permit"} or
+                    body["role"] != MUTATION_BODY["role"] or
+                    not isinstance(body["permit"], dict)):
+                raise ValueError("invalid effect envelope")
+        except (ValueError, UnicodeError, TypeError):
+            record(actor, 400, "invalid_mutation")
+            self.respond(400, "invalid_mutation")
+            return
+        try:
+            now = datetime.now(timezone.utc)
+            permit = verify_permit(body["permit"], verifier, now)
+            if permit["issuer"] != os.getenv("LAB_PERMIT_ISSUER", "isolated-iam-test-issuer"):
+                raise PermitRejected("untrusted_permit_issuer")
+        except (PermitRejected, KeyError, TypeError):
+            record(actor, 403, "permit_denied")
+            self.respond(403, "permit_denied")
+            return
+        try:
+            status, reason = commit_verified_permit(actor, permit, now)
+        except sqlite3.Error:
+            # A failed transaction never becomes an ALLOW.
+            self.respond(503, "target_commit_unavailable")
+            return
+        if status != 201:
+            record(actor, status, reason)
+        self.respond(status, reason)
 
     def log_message(self, format: str, *args: object) -> None:
         del format, args
