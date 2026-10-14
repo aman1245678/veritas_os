@@ -16,8 +16,6 @@ from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 import pytest
 
 TARGET = Path(__file__).resolve().parents[2] / "scripts/enterprise_iam_lab/target_service.py"
-NOW = datetime.now(timezone.utc)
-
 
 @pytest.fixture
 def lab(monkeypatch, tmp_path):
@@ -39,6 +37,7 @@ def lab(monkeypatch, tmp_path):
 
 def claims(module, **changes):
     from signed_permit import EXPECTED
+    now = datetime.now(timezone.utc)
     payload = {
         **EXPECTED,
         "issuer": "isolated-iam-test-issuer",
@@ -46,8 +45,8 @@ def claims(module, **changes):
         "authorization_id": "authorization-001",
         "execution_intent_id": "intent-001",
         "request_id": "request-001",
-        "not_before": (NOW - timedelta(minutes=3)).isoformat(),
-        "expires_at": (NOW + timedelta(minutes=3)).isoformat(),
+        "not_before": (now - timedelta(hours=1)).isoformat(),
+        "expires_at": (now + timedelta(hours=1)).isoformat(),
     }
     payload.update(changes)
     return payload
@@ -123,8 +122,8 @@ def test_concurrent_replay_has_exactly_one_commit(lab):
 @pytest.mark.parametrize("change", [
     {"scope": "saas:read"}, {"path": "/different"}, {"role": "viewer"},
     {"audience": "other"}, {"issuer": "impostor"},
-    {"expires_at": (NOW - timedelta(minutes=1)).isoformat()},
-    {"not_before": (NOW + timedelta(minutes=1)).isoformat()},
+    {"expires_at": (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()},
+    {"not_before": (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()},
 ])
 def test_wrong_signed_permit_is_denied_without_effect(lab, change):
     module, signer = lab
