@@ -56,7 +56,7 @@ def _validate_preconsume(artifact, *, deployment_pin, governance_inputs,
         for value in vars(deployment_pin).values()
     ):
         raise IAMPermitBridgeDenied("IAM_DEPLOYMENT_PIN_REQUIRED")
-    if type(signer) is not Ed25519PrivateKey:
+    if not isinstance(signer, Ed25519PrivateKey):
         raise IAMPermitBridgeDenied("IAM_PINNED_SIGNER_REQUIRED")
     if not isinstance(now, datetime) or now.tzinfo is None:
         raise IAMPermitBridgeDenied("IAM_TRUSTED_CLOCK_REQUIRED")
@@ -76,8 +76,10 @@ def _validate_preconsume(artifact, *, deployment_pin, governance_inputs,
         not isinstance(intent, dict)
         or intent.get("intended_action") != ACTION
         or getattr(contract, "action_class", None) != ACTION
-        or EXPECTED["scope"] not in getattr(contract, "allowed_scope", ())
-        or "admin" in getattr(contract, "prohibited_scope", ())
+        or not isinstance(getattr(contract, "allowed_scope", None), list)
+        or EXPECTED["scope"] not in contract.allowed_scope
+        or not isinstance(getattr(contract, "prohibited_scope", None), list)
+        or "admin" in contract.prohibited_scope
     ):
         raise IAMPermitBridgeDenied("IAM_EFFECT_NOT_AUTHORIZED_BY_NATIVE_CONTRACT")
 
