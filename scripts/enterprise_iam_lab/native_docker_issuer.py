@@ -22,6 +22,12 @@ import subprocess
 import sys
 import time
 
+# Direct script execution must resolve the repository's namespace packages,
+# not import an unrelated installed "scripts" package.
+ROOT = Path(__file__).resolve().parents[2]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from cryptography.hazmat.primitives.serialization import (
     Encoding, NoEncryption, PrivateFormat, PublicFormat, load_pem_private_key,
@@ -42,7 +48,6 @@ from veritas_os.tests.test_native_bind_authorization import _setup
 from veritas_os.tests.test_native_bind_authorization_consumption import _fresh
 from veritas_os.tests.test_promotion_human_approval_requirement_satisfaction import _contract
 
-ROOT = Path(__file__).resolve().parents[2]
 PUBLIC_NAME = "permit-public.pem"
 KEY_NAME = "ephemeral-native-issuer-private.pem"
 RECEIPT = "native_issuer_receipt.json"
