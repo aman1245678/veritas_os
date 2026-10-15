@@ -1,0 +1,116 @@
+name: "Isolated IAM Native Lost ACK Durable Reconciliation V1"
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/isolated-iam-native-lost-ack-reconciliation-v1.yml"
+      - "scripts/enterprise_iam_lab/reconcile_native_lost_ack.py"
+      - "scripts/enterprise_iam_lab/transport_probe.py"
+      - "scripts/enterprise_iam_lab/native_docker_issuer.py"
+      - "scripts/enterprise_iam_lab/run_native_docker.sh"
+      - "scripts/enterprise_iam_lab/verify_native_docker.py"
+      - "tests/quality/test_iam_native_lost_ack_reconciliation_v1.py"
+      - "tests/quality/test_iam_native_postgres_docker_v1.py"
+      - "docs/ISOLATED_IAM_NATIVE_LOST_ACK_RECONCILIATION_V1.md"
+      - "veritas_os/policy/bind_effect_runtime.py"
+      - "veritas_os/policy/bind_effect_reconciliation.py"
+      - "veritas_os/policy/live_adapter_bind_authorization_consumption_store.py"
+      - "compose.enterprise-iam-permit-transport.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: isolated-iam-native-lost-ack-v1-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  synthetic-lost-ack:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: veritas
+          POSTGRES_PASSWORD: veritas_test
+          POSTGRES_DB: veritas_test
+        options: >-
+          --health-cmd "pg_isready -U veritas"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+    env:
+      PYTHONUNBUFFERED: "1"
+      PYTHONDONTWRITEBYTECODE: "1"
+      VERITAS_DATABASE_URL: "postgresql+psycopg://veritas:veritas_test@localhost:5432/veritas_test"
+      VERITAS_DB_POOL_MIN_SIZE: "1"
+      LAB_NATIVE_DURABLE_PG: "1"
+      LAB_NATIVE_LOST_ACK: "1"
+      LAB_REPORT_DIR: "artifacts/isolated-enterprise-iam-native-lost-ack/latest"
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install existing native PostgreSQL and verifier dependencies
+        run: |
+          set -euo pipefail
+          python -m pip install -e ".[dev,signing]" "psycopg[binary]" psycopg-pool alembic
+      - name: Create fresh durable authorization and effect-state tables
+        run: alembic upgrade head
+      - name: Refuse fabricated acknowledgements and untrusted no-effect claims
+        run: |
+          set -euo pipefail
+          python -m pytest -q \
+            tests/quality/test_iam_native_lost_ack_reconciliation_v1.py \
+            tests/quality/test_iam_native_postgres_docker_v1.py \
+            tests/quality/test_iam_native_docker_verifier_v1.py
+      - name: One real mTLS request without reading ACK; reconcile durable target state in separate process
+        run: bash scripts/enterprise_iam_lab/run_native_docker.sh
+      - name: Verify bounded lost-ACK to CONFIRMED_EFFECT proof without retries
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          directory = Path("artifacts/isolated-enterprise-iam-native-lost-ack/latest")
+          report = json.loads((directory/"verification_post_native.json").read_text())
+          mark = json.loads((directory/"iam_reconciliation_mark_unknown.json").read_text())
+          rec = json.loads((directory/"iam_reconciliation_reconcile.json").read_text())
+          assert report["result"] == mark["result"] == rec["result"] == "PASS"
+          assert report["proof_status"] == "SYNTHETIC_NATIVE_POSTGRES_LOST_ACK_TARGET_RECONCILIATION_NOT_PROVEN"
+          assert report["lost_acknowledgement_response_unobserved"] is True
+          assert report["durable_effect_state_before"] == "EFFECT_UNKNOWN"
+          assert report["durable_effect_state_after"] == "CONFIRMED_EFFECT"
+          assert mark["effect_state"] == "EFFECT_UNKNOWN"
+          assert rec["effect_state_after"] == "CONFIRMED_EFFECT"
+          assert rec["terminal_state_immutable"] is True
+          assert report["native_postgres_consumption_rows"] == 1
+          assert report["target_effects_linked_to_postgres"] == 1
+          assert report["real_mtls_allowed_exactly_once"] is True
+          assert report["replay_rejected"] is True
+          assert report["mutation_retried"] is False
+          assert report["native_permit_reissued"] is False
+          assert rec["paid_provider_calls"] == 0
+          assert rec["external_cloud_iam_effects"] == 0
+          assert report["production_claim"] is False
+          print("IAM_2377_READONLY_LOST_ACK_RECONCILIATION_WITH_DURABLE_STATE_BOUNDED_PASS")
+          PY
+          cd "$LAB_REPORT_DIR"
+          find . -maxdepth 1 -name '*.json' -print0 | sort -z | xargs -0 sha256sum > manifest.sha256
+          sha256sum --check manifest.sha256
+      - name: Save bounded sanitized evidence only, no keys, databases or bearer permits
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: isolated-iam-native-lost-ack-reconciliation-v1
+          path: artifacts/isolated-enterprise-iam-native-lost-ack/latest/
+          retention-days: 30
+          if-no-files-found: warn
