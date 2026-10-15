@@ -60,6 +60,20 @@ def _pre_native(folder: Path, database: Path) -> dict:
     }
 
 
+def _verify_postgres_pre_native() -> None:
+    """A disposable native PostgreSQL authority ledger starts with zero writes."""
+    url = os.getenv("VERITAS_DATABASE_URL", "")
+    if not url.startswith(("postgresql://", "postgresql+psycopg://")):
+        raise AssertionError("REAL_POSTGRES_URL_REQUIRED")
+    import psycopg
+    from veritas_os.storage.db import _normalize_dsn
+
+    with psycopg.connect(_normalize_dsn(url), connect_timeout=5) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT count(*) FROM bind_authorization_consumptions")
+            assert cursor.fetchone()[0] == 0, "PRE_NATIVE_POSTGRES_ALREADY_CONSUMED"
+
+
 def _verified_native_postgres_join(receipt: dict, permit: dict, database: Path) -> dict:
     """Independently read durable native DB + target-owned effect; never trust receipt alone."""
     url = os.getenv("VERITAS_DATABASE_URL", "")
@@ -146,7 +160,11 @@ def verify(
     assert top["target_verifier_key_not_mounted_on_executor_or_agent"]
     assert top["scoped_client_credential_not_mounted_on_agent"]
     if phase == "pre-native":
-        return _pre_native(folder, database)
+        pre = _pre_native(folder, database)
+        if require_native_postgres:
+            _verify_postgres_pre_native()
+            pre["native_postgres_consumptions_before_issuance"] = 0
+        return pre
 
     assert phase == "post-native"
     assert trust_dir is not None and permit_dir is not None
