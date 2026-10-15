@@ -1,0 +1,49 @@
+name: Isolated IAM Signed Permit mTLS Transport V1
+
+on:
+  pull_request:
+    paths:
+      - "compose.enterprise-iam-permit-transport.yml"
+      - "scripts/enterprise_iam_lab/**"
+      - "tests/quality/test_iam_permit_transport_verifier_v1.py"
+      - ".github/workflows/isolated-iam-signed-permit-transport-v1.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: isolated-iam-permit-transport-v1-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  synthetic-iam-mtls-permit-transport:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      PYTHONUNBUFFERED: "1"
+      LAB_REPORT_DIR: artifacts/isolated-enterprise-iam-permit-transport/latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install pinned verification-only packages
+        run: |
+          python -m pip install pytest==9.0.3 cryptography==46.0.4
+
+      - name: Reject forged topology, TLS denial and target-ledger evidence
+        run: python -m pytest -q tests/quality/test_iam_permit_transport_verifier_v1.py
+
+      - name: Real isolated Docker mTLS signed-permit transport and target SQLite inspection
+        run: bash scripts/enterprise_iam_lab/run_permit_transport.sh
+
+      - name: Upload sanitized transport-only evidence (NEVER certs or permits)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: isolated-iam-signed-permit-transport-v1
+          path: artifacts/isolated-enterprise-iam-permit-transport/latest/
+          if-no-files-found: warn
