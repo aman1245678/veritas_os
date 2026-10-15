@@ -96,8 +96,6 @@ PY
 # effects and zero consumptions remain present before genuine native issuance.
 LAB_CASE=missing-permit "${COMPOSE[@]}" --profile probes run --rm --no-deps -T scoped-executor \
   > "$REPORT_DIR/missing_permit.json"
-"${COMPOSE[@]}" --profile probes run --rm --no-deps -T tls-probe \
-  > "$REPORT_DIR/no_client_cert.json"
 "${COMPOSE[@]}" --profile probes run --rm --no-deps -T agent-direct \
   > "$REPORT_DIR/agent_direct.json"
 
@@ -124,6 +122,8 @@ LAB_CASE=tamper "${COMPOSE[@]}" --profile probes run --rm --no-deps -T scoped-ex
   > "$REPORT_DIR/tampered.json"
 LAB_CASE=wrong-signer "${COMPOSE[@]}" --profile probes run --rm --no-deps -T scoped-executor \
   > "$REPORT_DIR/wrong_signer.json"
+"${COMPOSE[@]}" --profile probes run --rm --no-deps -T tls-probe \
+  > "$REPORT_DIR/no_client_cert.json"
 "${COMPOSE[@]}" --profile probes run --rm --no-deps -T unscoped-probe \
   > "$REPORT_DIR/unscoped.json"
 
