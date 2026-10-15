@@ -4,6 +4,7 @@
 name: ${LAB_PROJECT:?LAB_PROJECT required}
 
 x-transport-common: &transport-common
+  image: "${LAB_PROJECT:?LAB_PROJECT required}-transport:local"
   build:
     context: ./scripts/enterprise_iam_lab
     dockerfile: Dockerfile.transport
