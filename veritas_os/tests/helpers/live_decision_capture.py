@@ -70,6 +70,20 @@ def capture(
 
 
 if __name__ == "__main__":
+    # Isolated test interpreter: avoid inheriting the fake runtime/KMS
+    # environment into other pytest cases in the parent interpreter.
+    iam = "--synthetic-iam-grant" in sys.argv[2:]
     capture(
-        Path(sys.argv[1]), required_human_approval="--human-required" in sys.argv[2:]
+        Path(sys.argv[1]),
+        required_human_approval=iam or "--human-required" in sys.argv[2:],
+        candidate_overrides=(
+            {
+                "intended_action": "grant_admin_role",
+                "target_system": "isolated-iam-target",
+                "target_resource": "contractor-001",
+                "required_authority": ["saas:grant_admin"],
+                "required_human_approval": True,
+            }
+            if iam else None
+        ),
     )
