@@ -77,7 +77,7 @@ from veritas_os.tests import (
 )
 
 
-def build_native_authority_source(promotion, now):
+def build_native_authority_source(promotion, now, *, endpoint_overrides=None, credential_overrides=None):
     """Preserve the actual API promotion through every native source stage."""
     intent = promotion.exact_execution_intent
     descriptor = {
@@ -111,6 +111,7 @@ def build_native_authority_source(promotion, now):
         target_system=intent["target_system"],
         target_resource_scope=intent["target_resource"],
         declared_at=now.isoformat(),
+        **(endpoint_overrides or {}),
     )
     allowed = endpoint(dispatch, candidate, endpoints._snapshot(candidate), now)
     reference = credentials._reference(
@@ -119,6 +120,7 @@ def build_native_authority_source(promotion, now):
         target_system=intent["target_system"],
         target_resource_scope=intent["target_resource"],
         declared_at=now.isoformat(),
+        **(credential_overrides or {}),
     )
     authorized_metadata = credential(
         allowed, reference, credentials._snapshot(reference), now
