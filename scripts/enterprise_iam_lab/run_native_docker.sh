@@ -11,7 +11,7 @@ umask 077
 
 export LAB_UID="$(id -u)"
 export LAB_GID="$(id -g)"
-export LAB_PROJECT="veritas-iam-native-$(date +%s)-$"
+export LAB_PROJECT="veritas-iam-native-$(date +%s)-${BASHPID}"
 LAB_TMP="$(mktemp -d)"
 export LAB_CERT_DIR="$LAB_TMP/certs"
 export LAB_STATE_DIR="$LAB_TMP/state"
