@@ -262,14 +262,13 @@ async def test_consumption_store_uncertainty_never_signs(iam_native, monkeypatch
     async def commit_without_ack(receipt):
         await real(receipt)
         raise RuntimeError("sensitive backend detail")
-    async def forbidden_sign(*args, **kwargs):
+    def forbidden_sign(*args, **kwargs):
         pytest.fail("lost acknowledgement must never produce an effect permit")
     monkeypatch.setattr(store, "consume_once", commit_without_ack)
     monkeypatch.setattr(bridge, "sign_permit", forbidden_sign)
     with pytest.raises(ValueError, match="NABC_STORE_FAILED_OR_UNKNOWN"):
         await bridge.issue_iam_permit_after_native_consumption(artifact, **params)
     assert await store.get(artifact.authorization_id) is not None
+    monkeypatch.setattr(store, "consume_once", real)
     with pytest.raises(ValueError, match="NABC_ALREADY_CONSUMED"):
-        await bridge.issue_iam_permit_after_native_consumption(
-            artifact, **{**params, "consumption_store": store}
-        )
+        await bridge.issue_iam_permit_after_native_consumption(artifact, **params)
