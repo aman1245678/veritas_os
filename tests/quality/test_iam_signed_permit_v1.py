@@ -74,3 +74,12 @@ def test_unknown_fields_and_naive_clock_fail_closed():
         permit.sign_permit(data, signer)
     with pytest.raises(permit.PermitRejected, match="invalid_verification_clock"):
         permit.verify_permit(permit.sign_permit(claims(), signer), signer.public_key(), datetime(2026, 10, 14))
+
+
+@pytest.mark.parametrize("broken", ["!not-base64!", "@", "abc%", "====", ""])
+def test_malformed_base64_signature_fails_closed_without_handler_crash(broken):
+    signer = Ed25519PrivateKey.generate()
+    envelope = permit.sign_permit(claims(), signer)
+    envelope["signature"] = broken
+    with pytest.raises(permit.PermitRejected, match="invalid_permit_signature"):
+        permit.verify_permit(envelope, signer.public_key(), NOW)
