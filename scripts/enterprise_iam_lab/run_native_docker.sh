@@ -152,7 +152,7 @@ if [[ "${LAB_NATIVE_LOST_ACK:-0}" == "1" ]]; then
     > "$REPORT_DIR/allow_lost_ack.json"
   # Separate Python interpreter/process: persist a fail-closed UNKNOWN from
   # existing durable IN_FLIGHT, never from the expected success text.
-  python3 scripts/enterprise_iam_lab/reconcile_native_lost_ack.py \
+  python3 -m scripts.enterprise_iam_lab.reconcile_native_lost_ack \
     --phase mark-unknown --report-dir "$REPORT_DIR" \
     --trust-dir "$LAB_TRUST_DIR" --permit-dir "$LAB_PERMIT_DIR" \
     --target-database "$LAB_STATE_DIR/iam.sqlite3"
@@ -175,7 +175,7 @@ LAB_CASE=wrong-signer "${COMPOSE[@]}" --profile probes run --rm --no-deps -T sco
 if [[ "${LAB_NATIVE_LOST_ACK:-0}" == "1" ]]; then
   # Separate process after the response was deliberately discarded. Only a
   # fresh, read-only lookup of the target's own ledger may close UNKNOWN.
-  python3 scripts/enterprise_iam_lab/reconcile_native_lost_ack.py \
+  python3 -m scripts.enterprise_iam_lab.reconcile_native_lost_ack \
     --phase reconcile --report-dir "$REPORT_DIR" \
     --trust-dir "$LAB_TRUST_DIR" --permit-dir "$LAB_PERMIT_DIR" \
     --target-database "$LAB_STATE_DIR/iam.sqlite3"
