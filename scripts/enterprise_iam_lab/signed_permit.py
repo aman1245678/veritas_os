@@ -6,6 +6,7 @@ No target effects or production credentials.
 from __future__ import annotations
 
 import base64
+import binascii
 import json
 from datetime import datetime, timezone
 from typing import Any, Mapping
@@ -78,7 +79,7 @@ def verify_permit(envelope: Mapping[str, Any], verifier: Ed25519PublicKey, now: 
     try:
         decoded = base64.b64decode(signature, validate=True)
         verifier.verify(decoded, message)
-    except (ValueError, InvalidSignature) as exc:
+    except (ValueError, binascii.Error, InvalidSignature) as exc:
         raise PermitRejected("invalid_permit_signature") from exc
     validate_claims(payload, now)
     return dict(payload)
