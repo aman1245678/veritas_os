@@ -9,6 +9,20 @@ command -v openssl >/dev/null
 command -v python3 >/dev/null
 umask 077
 
+# #2375 baseline stays memory-only. PostgreSQL is explicitly opt-in.
+if [[ "${LAB_NATIVE_DURABLE_PG:-0}" == "1" ]]; then
+  [[ "${VERITAS_DATABASE_URL:-}" == postgresql://* || "${VERITAS_DATABASE_URL:-}" == postgresql+psycopg://* ]] ||
+    { echo "REAL_NATIVE_POSTGRES_REQUIRED" >&2; exit 2; }
+  IAM_NATIVE_ISSUE_ARGS=(--durable-postgres)
+  IAM_NATIVE_VERIFY_ARGS=(--require-native-postgres)
+elif [[ "${LAB_NATIVE_DURABLE_PG:-0}" == "0" ]]; then
+  IAM_NATIVE_ISSUE_ARGS=()
+  IAM_NATIVE_VERIFY_ARGS=()
+else
+  echo "INVALID_NATIVE_CONSUMPTION_MODE" >&2
+  exit 2
+fi
+
 export LAB_UID="$(id -u)"
 export LAB_GID="$(id -g)"
 export LAB_PROJECT="veritas-iam-native-$(date +%s)-${BASHPID}"
@@ -19,6 +33,10 @@ export LAB_TRUST_DIR="$LAB_TMP/trust"
 export LAB_PERMIT_DIR="$LAB_TMP/permits"
 export LAB_ISSUER_DIR="$LAB_TMP/native-issuer-private"
 REPORT_DIR="${LAB_REPORT_DIR:-artifacts/isolated-enterprise-iam-native-docker/latest}"
+if [[ "${LAB_NATIVE_DURABLE_PG:-0}" == "1" ]]; then
+  [[ -n "${LAB_REPORT_DIR:-}" ]] ||
+    { echo "DEDICATED_DURABLE_EVIDENCE_DIR_REQUIRED" >&2; exit 2; }
+fi
 mkdir -p "$LAB_CERT_DIR"/{server,scoped,unscoped,public} \
   "$LAB_STATE_DIR" "$LAB_TRUST_DIR" "$LAB_PERMIT_DIR" "$LAB_ISSUER_DIR" "$REPORT_DIR"
 chmod 0700 "$LAB_TMP" "$LAB_CERT_DIR" "$LAB_STATE_DIR" "$LAB_TRUST_DIR" "$LAB_PERMIT_DIR" "$LAB_ISSUER_DIR" "$LAB_CERT_DIR"/{server,scoped,unscoped,public}
@@ -101,7 +119,8 @@ LAB_CASE=missing-permit "${COMPOSE[@]}" --profile probes run --rm --no-deps -T s
 
 python3 scripts/enterprise_iam_lab/verify_native_docker.py \
   --phase pre-native --compose "$LAB_TMP/config.json" \
-  --database "$LAB_STATE_DIR/iam.sqlite3" --report-dir "$REPORT_DIR"
+  --database "$LAB_STATE_DIR/iam.sqlite3" --report-dir "$REPORT_DIR" \
+  "${IAM_NATIVE_VERIFY_ARGS[@]}"
 
 # CRITICAL: issue native signed approval + consume ONLY when Docker target is
 # healthy and scoped executor is ready; native authorization has a tiny
@@ -109,6 +128,7 @@ python3 scripts/enterprise_iam_lab/verify_native_docker.py \
 python3 scripts/enterprise_iam_lab/native_docker_issuer.py \
   --phase issue --issuer-dir "$LAB_ISSUER_DIR" --trust-dir "$LAB_TRUST_DIR" \
   --permit-dir "$LAB_PERMIT_DIR" --evidence-dir "$REPORT_DIR" \
+  "${IAM_NATIVE_ISSUE_ARGS[@]}" \
   > "$REPORT_DIR/native_issuer_run.json"
 
 # Keep ALLOW and replay IMMEDIATELY after native consume, before secondary
@@ -133,4 +153,5 @@ python3 scripts/enterprise_iam_lab/verify_native_docker.py \
   --trust-dir "$LAB_TRUST_DIR" --permit-dir "$LAB_PERMIT_DIR" \
   --report-dir "$REPORT_DIR" \
   --source-sha "$(git rev-parse HEAD)" \
-  --expected-sha "${GITHUB_SHA:-$(git rev-parse HEAD)}"
+  --expected-sha "${GITHUB_SHA:-$(git rev-parse HEAD)}" \
+  "${IAM_NATIVE_VERIFY_ARGS[@]}"

@@ -1,0 +1,106 @@
+name: "Isolated IAM Native PostgreSQL Docker mTLS V1"
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/isolated-iam-native-postgres-docker-v1.yml"
+      - "scripts/enterprise_iam_lab/native_docker_issuer.py"
+      - "scripts/enterprise_iam_lab/run_native_docker.sh"
+      - "scripts/enterprise_iam_lab/verify_native_docker.py"
+      - "tests/quality/test_iam_native_postgres_docker_v1.py"
+      - "tests/quality/test_iam_native_docker_verifier_v1.py"
+      - "veritas_os/policy/native_bind_authorization_consumption.py"
+      - "veritas_os/policy/live_adapter_bind_authorization_consumption_store.py"
+      - "veritas_os/tests/test_pg_bind_authorization_consumption_contention.py"
+      - "compose.enterprise-iam-permit-transport.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: isolated-iam-native-postgres-docker-v1-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  native-postgres-mtls:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: veritas
+          POSTGRES_PASSWORD: veritas_test
+          POSTGRES_DB: veritas_test
+        options: >-
+          --health-cmd "pg_isready -U veritas"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+    env:
+      PYTHONUNBUFFERED: "1"
+      PYTHONDONTWRITEBYTECODE: "1"
+      VERITAS_DATABASE_URL: "postgresql+psycopg://veritas:veritas_test@localhost:5432/veritas_test"
+      VERITAS_DB_POOL_MIN_SIZE: "1"
+      LAB_NATIVE_DURABLE_PG: "1"
+      LAB_REPORT_DIR: "artifacts/isolated-enterprise-iam-native-postgres-docker/latest"
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install original Native IAM and real PostgreSQL dependencies
+        run: |
+          set -euo pipefail
+          python -m pip install -e ".[dev,signing]" "psycopg[binary]" psycopg-pool alembic
+      - name: Migrate disposable native consumption PostgreSQL
+        run: alembic upgrade head
+      - name: Reject forged store modes and replay source
+        run: |
+          set -euo pipefail
+          python -m pytest -q tests/quality/test_iam_native_postgres_docker_v1.py
+          python -m pytest -q tests/quality/test_iam_native_docker_verifier_v1.py
+      - name: Real native PostgreSQL consume then signed Permit and Docker mTLS target
+        run: bash scripts/enterprise_iam_lab/run_native_docker.sh
+      - name: Check cross-database evidence and prohibited proof promotion
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          folder=Path("artifacts/isolated-enterprise-iam-native-postgres-docker/latest")
+          report=json.loads((folder/"verification_post_native.json").read_text())
+          assert report["result"] == "PASS"
+          assert report["phase"] == "post-native"
+          assert report["proof_status"] == "SYNTHETIC_NATIVE_POSTGRES_CONSUME_TO_REAL_DOCKER_MTLS_NOT_PROVEN"
+          assert report["native_consumption_store_durable"] is True
+          assert report["native_postgres_consumption_rows"] == 1
+          assert report["native_postgres_idempotency_rows"] == 1
+          assert report["target_effects_linked_to_postgres"] == 1
+          assert report["native_consumed_before_target_effect"] is True
+          assert report["native_record_digest_verified"] is True
+          assert report["real_mtls_allowed_exactly_once"] is True
+          assert report["replay_rejected"] is True
+          assert report["target_grants"] == 1
+          assert report["target_permit_consumptions"] == 1
+          assert report["production_claim"] is False
+          print("IAM_2376_DURABLE_NATIVE_POSTGRES_TO_DOCKER_MTLS_BOUNDED_PASS_NOT_PROVEN")
+          PY
+      - name: Existing native PostgreSQL contention and replay safety (after clean IAM proof)
+        run: |
+          python -m pytest -q veritas_os/tests/test_pg_bind_authorization_consumption_contention.py -m "postgresql and contention"
+      - name: Upload sanitized evidence only; no database, private key, signed bearer permit
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: isolated-iam-native-postgres-mtls-v1
+          path: artifacts/isolated-enterprise-iam-native-postgres-docker/latest/
+          retention-days: 30
+          if-no-files-found: warn
