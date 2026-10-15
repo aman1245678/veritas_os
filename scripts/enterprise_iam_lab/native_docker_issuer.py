@@ -138,10 +138,13 @@ def _native_fixture(issuer_dir: Path):
 
 
 async def issue(issuer_dir: Path, trust_dir: Path, permit_dir: Path,
-                evidence_dir: Path, *, durable_postgres: bool = False) -> dict:
+                evidence_dir: Path, *, durable_postgres: bool = False,
+                persist_effect_in_flight: bool = False) -> dict:
     """Use only trusted exact store classes; PostgreSQL is mandatory in durable mode."""
     if type(durable_postgres) is not bool:
         raise ValueError("IAM_NATIVE_STORE_MODE_INVALID")
+    if persist_effect_in_flight and not durable_postgres:
+        raise ValueError("IAM_DURABLE_EFFECT_TRACKING_REQUIRES_POSTGRES")
     if durable_postgres and not os.getenv("VERITAS_DATABASE_URL", "").startswith(
         ("postgresql://", "postgresql+psycopg://")
     ):
@@ -193,6 +196,25 @@ async def issue(issuer_dir: Path, trust_dir: Path, permit_dir: Path,
         )
         verified = verify_permit(envelope, signer.public_key(), actual)
         entry = await store.get(artifact.authorization_id)
+        if persist_effect_in_flight:
+            if entry is None:
+                raise ValueError("IAM_CONSUMED_RECORD_REQUIRED_FOR_EFFECT_TRACKING")
+            from veritas_os.policy.bind_effect_reconciliation import (
+                EffectExecutionState, PostgresAtomicEffectStateStore,
+            )
+            from veritas_os.policy.bind_effect_runtime import (
+                recover_in_flight_after_consumption,
+            )
+            # Create the durable IN_FLIGHT marker after consumption and
+            # before making the executable permit available to Docker.
+            # It is NOT confirmation of a target effect or an execution grant.
+            effect_state = await recover_in_flight_after_consumption(
+                consumption=entry,
+                effect_store=PostgresAtomicEffectStateStore(),
+                updated_at=datetime.now(timezone.utc),
+            )
+            if effect_state.state != EffectExecutionState.IN_FLIGHT:
+                raise ValueError("IAM_EFFECT_STATE_NOT_IN_FLIGHT")
     finally:
         if durable_postgres:
             await close_pool()
@@ -233,6 +255,7 @@ async def issue(issuer_dir: Path, trust_dir: Path, permit_dir: Path,
         "native_signed_human_approval_verified": True,
         "native_authorization_consumed": True,
         "native_store_durable": durable_postgres,
+        "durable_in_flight_created": persist_effect_in_flight,
         "native_in_memory_test_override": not durable_postgres,
         "authorization_id": artifact.authorization_id,
         "authorization_hash": artifact.authorization_hash,
@@ -265,6 +288,7 @@ def main() -> None:
     parser.add_argument("--permit-dir", type=Path)
     parser.add_argument("--evidence-dir", type=Path)
     parser.add_argument("--durable-postgres", action="store_true")
+    parser.add_argument("--persist-effect-in-flight", action="store_true")
     args = parser.parse_args()
     if args.phase == "prepare":
         prepare(args.issuer_dir, args.trust_dir)
@@ -275,6 +299,7 @@ def main() -> None:
     receipt = asyncio.run(issue(
         args.issuer_dir, args.trust_dir, args.permit_dir, args.evidence_dir,
         durable_postgres=args.durable_postgres,
+        persist_effect_in_flight=args.persist_effect_in_flight,
     ))
     print(json.dumps({
         "result": receipt["result"], "issuer_mode": receipt["issuer_mode"],
