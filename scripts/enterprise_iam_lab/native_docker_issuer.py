@@ -42,7 +42,9 @@ from veritas_os.policy.canonical_verified_decision_promotion import (
 )
 from veritas_os.policy.live_adapter_bind_authorization_consumption_store import (
     InMemoryAtomicAuthorizationConsumptionStore,
+    PostgresAtomicAuthorizationConsumptionStore,
 )
+from veritas_os.storage.db import close_pool
 from veritas_os.tests.helpers.native_approval_source import build_native_authority_source
 from veritas_os.tests.test_native_bind_authorization import _setup
 from veritas_os.tests.test_native_bind_authorization_consumption import _fresh
@@ -136,7 +138,14 @@ def _native_fixture(issuer_dir: Path):
 
 
 async def issue(issuer_dir: Path, trust_dir: Path, permit_dir: Path,
-                evidence_dir: Path) -> dict:
+                evidence_dir: Path, *, durable_postgres: bool = False) -> dict:
+    """Use only trusted exact store classes; PostgreSQL is mandatory in durable mode."""
+    if type(durable_postgres) is not bool:
+        raise ValueError("IAM_NATIVE_STORE_MODE_INVALID")
+    if durable_postgres and not os.getenv("VERITAS_DATABASE_URL", "").startswith(
+        ("postgresql://", "postgresql+psycopg://")
+    ):
+        raise ValueError("IAM_NATIVE_REAL_POSTGRES_REQUIRED")
     key_file = issuer_dir / KEY_NAME
     if not key_file.is_file() or not permit_dir.is_dir() or not evidence_dir.is_dir():
         raise ValueError("prepared trusted issuer and output dirs required")
@@ -159,27 +168,34 @@ async def issue(issuer_dir: Path, trust_dir: Path, permit_dir: Path,
     if expires - actual < timedelta(seconds=6):
         raise ValueError("NATIVE_WINDOW_TOO_SHORT_FOR_DOCKER_TRANSPORT")
     risk, current = _fresh(issuance, actual)
-    store = InMemoryAtomicAuthorizationConsumptionStore()
-    envelope = await bridge.issue_iam_permit_after_native_consumption(
-        artifact,
-        deployment_pin=bridge.IAMPermitDeploymentPin(
-            execution_intent_id=artifact.execution_intent_id,
-            execution_intent_hash=artifact.execution_intent_hash,
-            bind_context_hash=artifact.bind_context_hash,
-            action_contract_digest=artifact.action_contract_digest,
-        ),
-        issuance_source_inputs=issuance["source_inputs"],
-        governance_inputs=issuance["governance_inputs"],
-        trust_inputs=issuance["trust_inputs"],
-        current_source_inputs=current,
-        current_runtime_risk_packet=risk,
-        now=actual,
-        consumption_store=store,
-        signer=signer,
-        allow_in_memory_for_testing=True,
+    store = (
+        PostgresAtomicAuthorizationConsumptionStore()
+        if durable_postgres else InMemoryAtomicAuthorizationConsumptionStore()
     )
-    verified = verify_permit(envelope, signer.public_key(), actual)
-    entry = await store.get(artifact.authorization_id)
+    try:
+        envelope = await bridge.issue_iam_permit_after_native_consumption(
+            artifact,
+            deployment_pin=bridge.IAMPermitDeploymentPin(
+                execution_intent_id=artifact.execution_intent_id,
+                execution_intent_hash=artifact.execution_intent_hash,
+                bind_context_hash=artifact.bind_context_hash,
+                action_contract_digest=artifact.action_contract_digest,
+            ),
+            issuance_source_inputs=issuance["source_inputs"],
+            governance_inputs=issuance["governance_inputs"],
+            trust_inputs=issuance["trust_inputs"],
+            current_source_inputs=current,
+            current_runtime_risk_packet=risk,
+            now=actual,
+            consumption_store=store,
+            signer=signer,
+            allow_in_memory_for_testing=not durable_postgres,
+        )
+        verified = verify_permit(envelope, signer.public_key(), actual)
+        entry = await store.get(artifact.authorization_id)
+    finally:
+        if durable_postgres:
+            await close_pool()
     assert entry is not None, "no target permit without atomic native consumption"
     assert entry.live_adapter_bind_authorization_id == artifact.authorization_id
     assert entry.execution_intent_id == artifact.execution_intent_id
@@ -209,18 +225,23 @@ async def issue(issuer_dir: Path, trust_dir: Path, permit_dir: Path,
 
     receipt = {
         "result": "PASS",
-        "issuer_mode": "REAL_NATIVE_CONSUME_TEST_ONLY",
+        "issuer_mode": (
+            "REAL_NATIVE_POSTGRES_CONSUME_TEST_ONLY"
+            if durable_postgres else "REAL_NATIVE_CONSUME_TEST_ONLY"
+        ),
         "native_veritas_authorization_exercised": True,
         "native_signed_human_approval_verified": True,
         "native_authorization_consumed": True,
-        "native_store_durable": False,
-        "native_in_memory_test_override": True,
+        "native_store_durable": durable_postgres,
+        "native_in_memory_test_override": not durable_postgres,
         "authorization_id": artifact.authorization_id,
         "authorization_hash": artifact.authorization_hash,
         "execution_intent_id": artifact.execution_intent_id,
         "request_id": artifact.idempotency_key,
         "permit_id": verified["permit_id"],
         "consumption_id": entry.consumption_id,
+        "consumption_hash": entry.consumption_hash,
+        "consumption_recorded_at": entry.consumed_at,
         "approval_proof_digest": artifact.human_approval_verification_proof_digest,
         "permit_payload_sha256": hashlib.sha256(canonical(verified)).hexdigest(),
         "permit_not_before": verified["not_before"],
@@ -243,6 +264,7 @@ def main() -> None:
     parser.add_argument("--trust-dir", type=Path, required=True)
     parser.add_argument("--permit-dir", type=Path)
     parser.add_argument("--evidence-dir", type=Path)
+    parser.add_argument("--durable-postgres", action="store_true")
     args = parser.parse_args()
     if args.phase == "prepare":
         prepare(args.issuer_dir, args.trust_dir)
@@ -252,6 +274,7 @@ def main() -> None:
     # Print only safe bounded fields; never print signed permits or key bytes.
     receipt = asyncio.run(issue(
         args.issuer_dir, args.trust_dir, args.permit_dir, args.evidence_dir,
+        durable_postgres=args.durable_postgres,
     ))
     print(json.dumps({
         "result": receipt["result"], "issuer_mode": receipt["issuer_mode"],
