@@ -66,9 +66,6 @@ jobs:
           set -euo pipefail
           python -m pytest -q tests/quality/test_iam_native_postgres_docker_v1.py
           python -m pytest -q tests/quality/test_iam_native_docker_verifier_v1.py
-      - name: Existing native PostgreSQL contention and replay safety
-        run: |
-          python -m pytest -q veritas_os/tests/test_pg_bind_authorization_consumption_contention.py -m "postgresql and contention"
       - name: Real native PostgreSQL consume then signed Permit and Docker mTLS target
         run: bash scripts/enterprise_iam_lab/run_native_docker.sh
       - name: Check cross-database evidence and prohibited proof promotion
@@ -96,6 +93,9 @@ jobs:
           assert report["production_claim"] is False
           print("IAM_2376_DURABLE_NATIVE_POSTGRES_TO_DOCKER_MTLS_BOUNDED_PASS_NOT_PROVEN")
           PY
+      - name: Existing native PostgreSQL contention and replay safety (after clean IAM proof)
+        run: |
+          python -m pytest -q veritas_os/tests/test_pg_bind_authorization_consumption_contention.py -m "postgresql and contention"
       - name: Upload sanitized evidence only; no database, private key, signed bearer permit
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
