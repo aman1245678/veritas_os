@@ -1,0 +1,95 @@
+# Isolated TRANSPORT-ONLY permit demonstration. Never deploy to production.
+# In contrast with compose.enterprise-iam-lab.yml, mutations are explicitly
+# enabled ONLY when a separately signed, target-verified synthetic permit exists.
+name: ${LAB_PROJECT:?LAB_PROJECT required}
+
+x-transport-common: &transport-common
+  build:
+    context: ./scripts/enterprise_iam_lab
+    dockerfile: Dockerfile.transport
+  user: "${LAB_UID:?LAB_UID required}:${LAB_GID:?LAB_GID required}"
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
+  working_dir: /app
+  command: ["python", "-u", "/app/transport_probe.py"]
+  environment:
+    PYTHONDONTWRITEBYTECODE: "1"
+
+services:
+  iam-target:
+    <<: *transport-common
+    command: ["python", "-u", "/app/target_service.py"]
+    environment:
+      PYTHONDONTWRITEBYTECODE: "1"
+      LAB_DB_PATH: /run/lab/state/iam.sqlite3
+      LAB_ALLOW_MUTATIONS: "1"
+      LAB_TEST_PERMIT_GATE: "1"
+      LAB_PERMIT_VERIFIER_PEM: /run/lab/trust/permit-public.pem
+      LAB_PERMIT_ISSUER: isolated-iam-test-issuer
+    volumes:
+      - ./scripts/enterprise_iam_lab/target_service.py:/app/target_service.py:ro
+      - ./scripts/enterprise_iam_lab/signed_permit.py:/app/signed_permit.py:ro
+      - ${LAB_CERT_DIR:?}/server:/run/lab/certs:ro
+      - ${LAB_TRUST_DIR:?}:/run/lab/trust:ro
+      - ${LAB_STATE_DIR:?}:/run/lab/state
+    networks: [effect_net]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import socket; socket.create_connection(('127.0.0.1', 8443), timeout=2).close()"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+      start_period: 2s
+
+  scoped-executor:
+    <<: *transport-common
+    profiles: [probes]
+    environment:
+      PYTHONDONTWRITEBYTECODE: "1"
+      CASE: "${LAB_CASE:-allow}"
+    volumes:
+      - ./scripts/enterprise_iam_lab/transport_probe.py:/app/transport_probe.py:ro
+      - ${LAB_CERT_DIR:?}/scoped:/run/lab/certs:ro
+      - ${LAB_PERMIT_DIR:?}:/run/lab/permits:ro
+    networks: [effect_net]
+
+  unscoped-probe:
+    <<: *transport-common
+    profiles: [probes]
+    environment:
+      PYTHONDONTWRITEBYTECODE: "1"
+      CASE: "unscoped"
+    volumes:
+      - ./scripts/enterprise_iam_lab/transport_probe.py:/app/transport_probe.py:ro
+      - ${LAB_CERT_DIR:?}/unscoped:/run/lab/certs:ro
+      - ${LAB_PERMIT_DIR:?}:/run/lab/permits:ro
+    networks: [effect_net]
+
+  tls-probe:
+    <<: *transport-common
+    profiles: [probes]
+    environment:
+      PYTHONDONTWRITEBYTECODE: "1"
+      CASE: "no-client-cert"
+    volumes:
+      - ./scripts/enterprise_iam_lab/transport_probe.py:/app/transport_probe.py:ro
+      - ${LAB_CERT_DIR:?}/public:/run/lab/certs:ro
+      - ${LAB_PERMIT_DIR:?}:/run/lab/permits:ro
+    networks: [effect_net]
+
+  agent-direct:
+    <<: *transport-common
+    profiles: [probes]
+    environment:
+      PYTHONDONTWRITEBYTECODE: "1"
+      CASE: "agent-direct"
+      TARGET_IP: "${LAB_TARGET_IP:-127.0.0.1}"
+    volumes:
+      - ./scripts/enterprise_iam_lab/transport_probe.py:/app/transport_probe.py:ro
+    networks: [agent_net]
+
+networks:
+  agent_net:
+    internal: true
+  effect_net:
+    internal: true
