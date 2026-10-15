@@ -40,7 +40,7 @@ pytestmark = pytest.mark.slow
 api_risk_source = api_fixture
 
 
-def _setup(source, contract, now):
+def _setup(source, contract, now, *, validity_seconds=20):
     final, risk, anchors = _risk_chain(source, contract, now)
     source_inputs = module.NativeAuthorizationSourceInputs(
         final_recheck=final,
@@ -107,7 +107,8 @@ def _setup(source, contract, now):
             authorization_issuer_verifier_policy=policy,
         )
         start = anchors["verification_now"]
-        end = now + timedelta(seconds=20)
+        # Fixture-only bounded native authorization window; strict risk limits remain.
+        end = now + timedelta(seconds=validity_seconds)
         decision = crypto._signed_decision(
             key, source=context, valid_from=start, valid_until=end
         )
