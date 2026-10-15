@@ -1,0 +1,54 @@
+name: Isolated IAM Native Approved Docker mTLS V1
+
+on:
+  pull_request:
+    paths:
+      - "scripts/enterprise_iam_lab/native_docker_issuer.py"
+      - "scripts/enterprise_iam_lab/run_native_docker.sh"
+      - "scripts/enterprise_iam_lab/verify_native_docker.py"
+      - "veritas_os/tests/test_native_bind_authorization.py"
+      - "veritas_os/tests/test_iam_native_approved_target_e2e_v1.py"
+      - "tests/quality/test_iam_native_docker_verifier_v1.py"
+      - "compose.enterprise-iam-permit-transport.yml"
+      - "scripts/enterprise_iam_lab/transport_probe.py"
+      - ".github/workflows/isolated-iam-native-approved-docker-v1.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: isolated-iam-native-approved-docker-v1-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  native-approved-synthetic-docker-mtls:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      PYTHONUNBUFFERED: "1"
+      PYTHONDONTWRITEBYTECODE: "1"
+      LAB_REPORT_DIR: artifacts/isolated-enterprise-iam-native-docker/latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install pinned native verifier and fixture dependencies
+        run: python -m pip install -e ".[dev,signing]"
+
+      - name: Reject forged native issuer or target-owned audit evidence offline
+        run: python -m pytest -q tests/quality/test_iam_native_docker_verifier_v1.py
+
+      - name: Real synthetic native Human Approval and consume to Docker mTLS IAM target
+        run: bash scripts/enterprise_iam_lab/run_native_docker.sh
+
+      - name: Upload sanitized bounded synthetic-native Docker evidence (NO keys or permits)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: isolated-iam-native-approved-docker-v1
+          path: artifacts/isolated-enterprise-iam-native-docker/latest/
+          if-no-files-found: warn
