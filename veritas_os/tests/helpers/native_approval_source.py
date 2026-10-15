@@ -77,7 +77,7 @@ from veritas_os.tests import (
 )
 
 
-def build_native_authority_source(promotion, now, *, endpoint_overrides=None, credential_overrides=None):
+def build_native_authority_source(promotion, now, *, endpoint_overrides=None, credential_overrides=None, authority_scope=None):
     """Preserve the actual API promotion through every native source stage."""
     intent = promotion.exact_execution_intent
     descriptor = {
@@ -135,6 +135,11 @@ def build_native_authority_source(promotion, now, *, endpoint_overrides=None, cr
         now,
     )
     bundle = authorities._bundle(reviewed)
+    if authority_scope is not None:
+        # Explicit test-owned scope declaration BEFORE native evidence signing.
+        bundle["bundle_scope"] = [authority_scope]
+        for ref in bundle["authority_evidence_references"]:
+            ref["authority_scope"] = authority_scope
     bundle["bundle_declared_at"] = now.isoformat()
     for item in bundle["authority_evidence_references"]:
         item["authority_subject"] = intent["actor_identity"]
