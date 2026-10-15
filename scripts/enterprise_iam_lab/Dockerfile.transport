@@ -1,0 +1,5 @@
+# Disposable test-only transport runtime. No app secrets are baked in.
+FROM python:3.12-slim
+RUN python -m pip install --no-cache-dir --disable-pip-version-check cryptography==46.0.4
+ENV PYTHONDONTWRITEBYTECODE=1
+WORKDIR /app
