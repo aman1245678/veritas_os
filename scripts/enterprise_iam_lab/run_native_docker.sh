@@ -119,7 +119,8 @@ LAB_CASE=missing-permit "${COMPOSE[@]}" --profile probes run --rm --no-deps -T s
 
 python3 scripts/enterprise_iam_lab/verify_native_docker.py \
   --phase pre-native --compose "$LAB_TMP/config.json" \
-  --database "$LAB_STATE_DIR/iam.sqlite3" --report-dir "$REPORT_DIR"
+  --database "$LAB_STATE_DIR/iam.sqlite3" --report-dir "$REPORT_DIR" \
+  "${IAM_NATIVE_VERIFY_ARGS[@]}"
 
 # CRITICAL: issue native signed approval + consume ONLY when Docker target is
 # healthy and scoped executor is ready; native authorization has a tiny
