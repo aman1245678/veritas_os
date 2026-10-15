@@ -76,7 +76,7 @@ def _link(source, now):
     bundle = humans._bundle(source)
     # An IAM-native signed approval must cover the SAME authority scope;
     # the existing generic fixture still defaults to "bind-request".
-    authority_scope = source.authority_evidence_reference_bundle["bundle_scope"]
+    authority_scope = list(source.authority_evidence_reference_bundle.bundle_scope)
     if authority_scope != ["bind-request"]:
         bundle["bundle_scope"] = list(authority_scope)
         for item in bundle["human_approval_references"]:
