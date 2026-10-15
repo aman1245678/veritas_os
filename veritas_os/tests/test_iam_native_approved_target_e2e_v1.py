@@ -63,6 +63,7 @@ def iam_native(tmp_path_factory):
     )
     source = build_native_authority_source(
         promotion, now,
+        authority_scope=EXPECTED["scope"],
         endpoint_overrides={
             "endpoint_candidate_id": "endpoint:isolated:iam:2373",
             "endpoint_host": "iam-target",
