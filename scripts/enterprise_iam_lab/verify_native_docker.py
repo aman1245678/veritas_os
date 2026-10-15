@@ -19,8 +19,14 @@ import sqlite3
 
 from cryptography.hazmat.primitives.serialization import load_pem_public_key
 
-from signed_permit import canonical, verify_permit
-from verify_transport import (
+import sys
+
+ROOT = Path(__file__).resolve().parents[2]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from scripts.enterprise_iam_lab.signed_permit import canonical, verify_permit
+from scripts.enterprise_iam_lab.verify_transport import (
     PATH, _load, _require_http, _target_state, verify_denials, verify_topology,
 )
 
