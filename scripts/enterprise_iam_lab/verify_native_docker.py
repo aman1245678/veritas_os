@@ -158,6 +158,7 @@ def verify(
     lost_ack_recovery: bool = False,
     process_restart_recovery: bool = False,
     signed_ack_reconciliation: bool = False,
+    ack_freshness: bool = False,
 ) -> dict:
     top = verify_topology(config)
     assert top["target_verifier_key_not_mounted_on_executor_or_agent"]
@@ -175,6 +176,7 @@ def verify(
     assert not signed_ack_reconciliation or (
         lost_ack_recovery and require_native_postgres and not process_restart_recovery
     )
+    assert not ack_freshness or signed_ack_reconciliation
     assert trust_dir is not None and permit_dir is not None
     assert re.fullmatch(r"[0-9a-f]{40}", source_sha)
     assert source_sha == expected_sha
@@ -378,7 +380,21 @@ def verify(
         assert signed["effect_state_after"] == "CONFIRMED_EFFECT"
         assert signed["revision"] == 3
         assert signed["production_claim"] is False
+        if ack_freshness:
+            fresh = _load(folder / "iam_freshness_challenge.json")
+            signed_normal = _load(folder / "readonly_valid.json")
+            assert fresh["schema"] == "iam-2381-host-challenge/v1"
+            assert fresh["permit_id"] == receipt["permit_id"]
+            assert signed_normal["challenge_bound_receipt"] is True
+            assert signed_normal["signed_ack"]["payload"]["challenge"] == fresh["challenge"]
+            assert signed["freshness_challenge_verified"] is True
+            assert signed["target_ack_freshness_bounded_seconds"] == 120
+            assert signed["cross_host_replay_proven"] is False
+            assert signed["freshness_challenge_digest"] is not None
         signed_ack_evidence = {
+            "signed_target_challenge_freshness_verified": ack_freshness,
+            "historical_signed_reply_reuse_rejected_for_new_nonce": ack_freshness,
+            "cross_host_replay_proven": False,
             "signed_target_mtls_observation_used_for_cas": True,
             "reconciliation_cas_target_sqlite_direct_access": False,
             "signed_target_reconciliation_sha256": signed["target_ack_sha256"],
@@ -433,6 +449,7 @@ def main() -> None:
     parser.add_argument("--lost-ack-recovery", action="store_true")
     parser.add_argument("--process-restart-recovery", action="store_true")
     parser.add_argument("--signed-ack-reconciliation", action="store_true")
+    parser.add_argument("--ack-freshness", action="store_true")
     args = parser.parse_args()
     result = verify(
         phase=args.phase, folder=args.report_dir,
@@ -443,6 +460,7 @@ def main() -> None:
         lost_ack_recovery=args.lost_ack_recovery,
         process_restart_recovery=args.process_restart_recovery,
         signed_ack_reconciliation=args.signed_ack_reconciliation,
+        ack_freshness=args.ack_freshness,
     )
     output = args.report_dir / ("verification_" + args.phase.replace("-", "_") + ".json")
     output.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8")
