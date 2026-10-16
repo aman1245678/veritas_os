@@ -478,7 +478,9 @@ async def test_reproducible_reconciliation_capable_execution_profile(
     assert rows_after_fault == rows_before + 2
 
     migration = await base._migration_head()
-    assert migration == "0010"
+    # Alembic 0011 adds the opt-in challenge table on top of 0010;
+    # legacy reconciliation behavior remains unchanged.
+    assert migration == "0011"
 
     normal_gate = gate_capture[normal_case["artifact"].authorization_id]
     fault_gate = gate_capture[fault_case["artifact"].authorization_id]
