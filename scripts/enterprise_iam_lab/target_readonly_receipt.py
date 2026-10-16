@@ -34,7 +34,7 @@ SCHEMA_CHALLENGE = "isolated-iam-target-committed-ack/v2-challenge"
 FIELDS_CHALLENGE = FIELDS | frozenset({
     "challenge", "target_observed_at", "target_expires_at",
 })
-CHALLENGE_PATTERN = re.compile(r"[0-9a-f]{64}\\Z")
+CHALLENGE_PATTERN = re.compile(r"[0-9a-f]{64}\Z")
 MAX_OBSERVATION_VALIDITY = timedelta(seconds=120)
 
 
@@ -54,7 +54,8 @@ def canonical(payload: dict) -> bytes:
     if set(payload) != expected_fields:
         raise ValueError("IAM2379_ACK_FIELDS_INVALID")
     if version == SCHEMA_CHALLENGE:
-        if (not CHALLENGE_PATTERN.fullmatch(payload["challenge"])
+        if (type(payload["challenge"]) is not str
+                or not CHALLENGE_PATTERN.fullmatch(payload["challenge"])
                 or not all(
                     type(payload[key]) is str and payload[key]
                     for key in ("target_observed_at", "target_expires_at")
