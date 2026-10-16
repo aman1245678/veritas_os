@@ -57,7 +57,8 @@ def init_db() -> None:
             " request_id TEXT NOT NULL,"
             " actor TEXT NOT NULL,"
             " audit_id INTEGER UNIQUE NOT NULL,"
-            " consumed_at TEXT NOT NULL)"
+            " consumed_at TEXT NOT NULL,"
+            " source_nonce_sha256 TEXT UNIQUE)"
         )
 
 
@@ -74,7 +75,7 @@ def record(actor: str, status: int, reason: str, *, grant: bool = False) -> None
         )
 
 
-def commit_verified_permit(actor: str, payload: dict[str, str], now: datetime) -> tuple[int, str]:
+def commit_verified_permit(actor: str, payload: dict, now: datetime, *, source_nonce_sha256: str | None = None) -> tuple[int, str]:
     """Atomic, target-owned commit. Caller MUST verify the permit first.
 
     A duplicate permit or authorization cannot commit a second effect, even
@@ -89,6 +90,20 @@ def commit_verified_permit(actor: str, payload: dict[str, str], now: datetime) -
         if replay is not None:
             db.rollback()
             return 409, "permit_replayed"
+        if source_nonce_sha256 is not None:
+            # Persistent target-owned replay fence, shared across different
+            # native authorization IDs and issuer Permit IDs on this SQLite.
+            try:
+                replayed_source = db.execute(
+                    "SELECT 1 FROM permit_consumptions WHERE source_nonce_sha256 = ?",
+                    (source_nonce_sha256,),
+                ).fetchone()
+            except sqlite3.Error:
+                db.rollback()
+                raise
+            if replayed_source is not None:
+                db.rollback()
+                return 409, "source_replayed"
         try:
             db.execute(
                 "INSERT INTO grants(user_id, role) VALUES(?, ?)",
@@ -105,10 +120,11 @@ def commit_verified_permit(actor: str, payload: dict[str, str], now: datetime) -
             db.execute(
                 "INSERT INTO permit_consumptions("
                 "permit_id, authorization_id, execution_intent_id, request_id,"
-                "actor, audit_id, consumed_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                "actor, audit_id, consumed_at, source_nonce_sha256)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                 (payload["permit_id"], payload["authorization_id"],
                  payload["execution_intent_id"], payload["request_id"],
-                 actor, receipt.lastrowid, now.isoformat()),
+                 actor, receipt.lastrowid, now.isoformat(), source_nonce_sha256),
             )
             db.commit()
             return 201, "committed"
@@ -255,12 +271,24 @@ class Handler(BaseHTTPRequestHandler):
             permit = verify_permit(body["permit"], verifier, now)
             if permit["issuer"] != os.getenv("LAB_PERMIT_ISSUER", "isolated-iam-test-issuer"):
                 raise PermitRejected("untrusted_permit_issuer")
-        except (PermitRejected, KeyError, TypeError):
+            source_digest = None
+            if os.getenv("LAB_TARGET_SOURCE_BOUND_PERMIT", "0") == "1":
+                # The target independently checks origin-signer trust, exact
+                # authorized IAM request/candidate, digest, expiry, nonce and
+                # target/role binding. This is not a post-fact host report.
+                from source_bound_target_policy import verify_target_source
+                origin_key = Path(os.environ["LAB_TARGET_ORIGIN_VERIFIER_PEM"]).read_bytes()
+                source_digest = verify_target_source(permit, origin_key, now=now)
+            elif permit["version"] != "isolated-iam-permit-v1":
+                raise PermitRejected("source_v2_requires_target_gate")
+        except (PermitRejected, KeyError, TypeError, ValueError, OSError, ImportError):
             record(actor, 403, "permit_denied")
             self.respond(403, "permit_denied")
             return
         try:
-            status, reason = commit_verified_permit(actor, permit, now)
+            status, reason = commit_verified_permit(
+                actor, permit, now, source_nonce_sha256=source_digest,
+            )
         except sqlite3.Error:
             # A failed transaction never becomes an ALLOW.
             self.respond(503, "target_commit_unavailable")
