@@ -53,7 +53,7 @@ def verify_target_signature(envelope: dict, public_pem: bytes) -> dict:
     signature = envelope["signature"]
     require(type(signature) is str, "IAM2379_ACK_SIGNATURE_INVALID")
     key = load_pem_public_key(public_pem)
-    require(type(key) is Ed25519PublicKey, "IAM2379_TARGET_PUBLIC_KEY_INVALID")
+    require(isinstance(key, Ed25519PublicKey), "IAM2379_TARGET_PUBLIC_KEY_INVALID")
     try:
         decoded = base64.b64decode(signature, validate=True)
         key.verify(decoded, canonical(payload))
