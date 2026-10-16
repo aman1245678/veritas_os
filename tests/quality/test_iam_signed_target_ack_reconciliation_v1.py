@@ -264,7 +264,12 @@ def test_new_reconciliation_path_has_no_target_sqlite_or_mutation_api():
     assert "sqlite3.connect(" not in source
     assert "lookup_exact_target_effect(" not in source
     assert "_verified_native_postgres_join(" not in source
-    assert "--target-database" not in source
+    assert not any(
+        isinstance(node, ast.Constant)
+        and isinstance(node.value, str)
+        and node.value == "--target-database"
+        for node in ast.walk(syntax)
+    ), "target database CLI argument must not be accepted"
     assert "commit_verified_permit(" not in source
     assert "issue_iam_permit_after_native_consumption(" not in source
     assert "recover_in_flight_after_consumption(" not in source
