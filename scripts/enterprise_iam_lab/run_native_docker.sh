@@ -45,6 +45,21 @@ elif [[ "${LAB_NATIVE_PROCESS_RESTART:-0}" != "0" ]]; then
   exit 2
 fi
 
+# #2381: opt-in request-bound signed target evidence, NEVER a generic
+# authenticated receipt freshness or production replay-prevention claim.
+if [[ "${LAB_TARGET_ACK_FRESHNESS:-0}" == "1" ]]; then
+  [[ "${LAB_NATIVE_DURABLE_PG:-0}" == "1" &&
+     "${LAB_NATIVE_LOST_ACK:-0}" == "1" &&
+     "${LAB_TARGET_READONLY_ACK:-0}" == "1" &&
+     "${LAB_NATIVE_SIGNED_ACK_RECONCILE:-0}" == "1" &&
+     "${LAB_NATIVE_PROCESS_RESTART:-0}" == "0" ]] ||
+    { echo "CHALLENGE_BOUND_ACK_REQUIRES_REAL_PG_LOST_ACK_SIGNED_MTLS_CAS" >&2; exit 2; }
+  IAM_NATIVE_VERIFY_ARGS+=(--ack-freshness)
+elif [[ "${LAB_TARGET_ACK_FRESHNESS:-0}" != "0" ]]; then
+  echo "INVALID_ACK_FRESHNESS_MODE" >&2
+  exit 2
+fi
+
 # #2379's known-response read-only mode stays unchanged by default.
 # #2380 alone may combine it with #2377's genuine lost-ACK/UNKNOWN flow.
 if [[ "${LAB_NATIVE_SIGNED_ACK_RECONCILE:-0}" == "1" ]]; then
@@ -249,6 +264,35 @@ Path(sys.argv[2]).write_text(
     encoding="utf-8",
 )
 PY
+  if [[ "${LAB_TARGET_ACK_FRESHNESS:-0}" == "1" ]]; then
+    # The verifier-side host registers one non-authorizing, random challenge
+    # AFTER real native EFFECT_UNKNOWN persistence and BEFORE target GET.
+    # This is NOT an authorization, execution token, or proof of global
+    # single-use; the signed target observation must match this exact nonce.
+    python3 - "$REPORT_DIR/native_issuer_receipt.json" \
+        "$REPORT_DIR/iam_reconciliation_mark_unknown.json" \
+        "$REPORT_DIR/iam_freshness_challenge.json" \
+        "$LAB_READONLY_REF_DIR/challenge.json" <<'PY2381'
+import json
+import secrets
+from datetime import datetime, timezone
+from pathlib import Path
+import sys
+receipt = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+unknown = json.loads(Path(sys.argv[2]).read_text(encoding="utf-8"))
+assert unknown["effect_state"] == "EFFECT_UNKNOWN"
+assert unknown["operation_id"] == receipt["consumption_id"]
+payload = {
+    "schema": "iam-2381-host-challenge/v1",
+    "permit_id": receipt["permit_id"],
+    "target_status_before_lookup": "EFFECT_UNKNOWN",
+    "challenge": secrets.token_hex(32),
+    "issued_at": datetime.now(timezone.utc).isoformat(),
+}
+for name in sys.argv[3:]:
+    Path(name).write_text(json.dumps(payload, sort_keys=True) + "\n", encoding="utf-8")
+PY2381
+  fi
   LAB_READONLY_CASE=valid "${COMPOSE[@]}" --profile probes run --rm --no-deps -T reconciliation-reader \
     > "$REPORT_DIR/readonly_valid.json"
   LAB_READONLY_CASE=missing "${COMPOSE[@]}" --profile probes run --rm --no-deps -T reconciliation-reader \
@@ -328,7 +372,8 @@ if [[ "${LAB_NATIVE_SIGNED_ACK_RECONCILE:-0}" == "1" ]]; then
     --report-dir "$REPORT_DIR" --trust-dir "$LAB_TRUST_DIR" \
     --permit-dir "$LAB_PERMIT_DIR" \
     --target-public-key "$LAB_READONLY_REF_DIR/target-ack-public.pem" \
-    --compose-config "$LAB_TMP/config.json"
+    --compose-config "$LAB_TMP/config.json" \
+    $([[ "${LAB_TARGET_ACK_FRESHNESS:-0}" == "1" ]] && echo --freshness-challenge)
 elif [[ "${LAB_NATIVE_LOST_ACK:-0}" == "1" ]]; then
   # Legacy #2377/#2378 separate-process same-host SQLite reconciliation.
   python3 -m scripts.enterprise_iam_lab.reconcile_native_lost_ack \
