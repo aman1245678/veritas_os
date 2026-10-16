@@ -46,6 +46,16 @@ def _read_json(path: Path) -> dict:
     return value
 
 
+def _read_docker_inspect(path: Path) -> dict:
+    """docker inspect prints a JSON array containing exactly one container."""
+    require(path.is_file() and not path.is_symlink(),
+            "IAM2378_DOCKER_INSPECT_MISSING")
+    value = json.loads(path.read_text(encoding="utf-8"))
+    require(type(value) is list and len(value) == 1 and type(value[0]) is dict,
+            "IAM2378_DOCKER_INSPECT_SHAPE_INVALID")
+    return value[0]
+
+
 def _write_once_synced(path: Path, record: dict) -> None:
     """Durably materialize nonsecret checkpoint before the worker is SIGKILLed."""
     require(path.parent.is_dir() and not path.exists() and not path.is_symlink(),
@@ -190,8 +200,8 @@ async def _verify_after_restart(*, folder: Path, trust: Path, permits: Path,
         and terminated.get("production_claim") is False,
         "IAM2378_ABORTED_WORKER_NOT_PROVEN",
     )
-    before = _read_json(before_inspect)
-    after = _read_json(after_inspect)
+    before = _read_docker_inspect(before_inspect)
+    after = _read_docker_inspect(after_inspect)
     topology = validate_inspect(before, after)
     try:
         state = await _unknown_state(receipt=receipt, permit=permit)
