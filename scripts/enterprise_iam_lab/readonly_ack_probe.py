@@ -77,7 +77,7 @@ def run() -> int:
         from cryptography.exceptions import InvalidSignature
         from target_readonly_receipt import canonical as ack_canonical
         key = load_pem_public_key(Path(PUB).read_bytes())
-        if type(key) is not Ed25519PublicKey:
+        if not isinstance(key, Ed25519PublicKey):
             return stop("IAM2379_PUBLIC_KEY_INVALID")
         try:
             key.verify(base64.b64decode(body["signature"], validate=True),
