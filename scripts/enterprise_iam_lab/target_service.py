@@ -16,6 +16,7 @@ from pathlib import Path
 import sqlite3
 import ssl
 from threading import Lock
+from urllib.parse import quote, unquote
 
 TARGET_PATH = "/v1/iam/users/contractor-001/roles"
 TARGET_USER = "contractor-001"
@@ -135,8 +136,53 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_GET(self) -> None:  # noqa: N802
-        # Still protected by mTLS, but not by role scope.
-        self.respond(200 if self.path == "/health" else 404, "health" if self.path == "/health" else "not_found")
+        # /health remains unchanged for all existing isolated IAM tests.
+        if self.path == "/health":
+            self.respond(200, "health")
+            return
+        if os.getenv("LAB_TEST_READONLY_ACK", "0") != "1":
+            self.respond(404, "not_found")
+            return
+        from target_readonly_receipt import (
+            PREFIX, UnknownEffect, committed_from_target, sign_committed,
+        )
+        if not self.path.startswith(PREFIX):
+            self.respond(404, "not_found")
+            return
+        # The read-only credential is distinct from scoped-executor and
+        # unscoped-probe, even though all may have CA-trusted client certs.
+        actor = client_cn(self.connection.getpeercert() or {})
+        if actor != "reconciliation-reader":
+            self.respond(403, "reconciliation_reader_not_authorized")
+            return
+        suffix = self.path[len(PREFIX):]
+        ref = unquote(suffix, errors="strict")
+        if quote(ref, safe="") != suffix:
+            self.respond(400, "reconciliation_reference_not_canonical")
+            return
+        try:
+            payload = committed_from_target(DB_PATH, ref)
+        except ValueError:
+            # No signed NO_EFFECT response is ever issued from absence.
+            self.respond(404, "effect_not_confirmed")
+            return
+        except (sqlite3.Error, OSError):
+            self.respond(503, "reconciliation_target_unavailable")
+            return
+        try:
+            envelope = sign_committed(
+                payload, Path(os.environ["LAB_TARGET_ACK_SIGNER_PEM"]),
+            )
+        except (ValueError, TypeError, OSError, KeyError):
+            self.respond(503, "reconciliation_signer_unavailable")
+            return
+        body = json.dumps(envelope, sort_keys=True).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
 
     def do_POST(self) -> None:  # noqa: N802
         actor = client_cn(self.connection.getpeercert() or {})
