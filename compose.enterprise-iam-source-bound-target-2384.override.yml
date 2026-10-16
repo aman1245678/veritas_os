@@ -1,0 +1,9 @@
+# #2384 ONLY: target v2 signed origin verification + durable source-nonce fence.
+# No production IAM, real RCC operator, public endpoint or shared private key.
+services:
+  iam-target:
+    environment:
+      LAB_TARGET_SOURCE_BOUND_PERMIT: "1"
+      LAB_TARGET_ORIGIN_VERIFIER_PEM: /run/lab/trust/origin-public.pem
+    volumes:
+      - ./scripts/enterprise_iam_lab/source_bound_target_policy.py:/app/source_bound_target_policy.py:ro
