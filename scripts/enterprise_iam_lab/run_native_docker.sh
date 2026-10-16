@@ -57,6 +57,21 @@ elif [[ "${LAB_DURABLE_CHALLENGE:-0}" != "0" ]]; then
   echo "INVALID_DURABLE_CHALLENGE_MODE" >&2
   exit 2
 fi
+# #2383 opt-in: signed controlled-source IAM proposal, not #416 counter
+# authority. Requires native durable path and downstream target verification.
+IAM_SOURCE_BOUND_ARGS=()
+if [[ "${LAB_SOURCE_BOUND_IAM_ADMISSION:-0}" == "1" ]]; then
+  [[ "${LAB_NATIVE_DURABLE_PG:-0}" == "1" &&
+     "${LAB_NATIVE_LOST_ACK:-0}" == "1" &&
+     "${LAB_TARGET_READONLY_ACK:-0}" == "1" &&
+     "${LAB_NATIVE_SIGNED_ACK_RECONCILE:-0}" == "1" &&
+     "${LAB_TARGET_ACK_FRESHNESS:-0}" == "1" &&
+     "${LAB_DURABLE_CHALLENGE:-0}" == "1" ]] ||
+    { echo "IAM2383_SOURCE_REQUIRES_FULL_SIGNED_POSTGRES_RECONCILIATION" >&2; exit 2; }
+elif [[ "${LAB_SOURCE_BOUND_IAM_ADMISSION:-0}" != "0" ]]; then
+  echo "IAM2383_INVALID_SOURCE_BOUND_MODE" >&2
+  exit 2
+fi
 IAM_FRESHNESS_ARGS=()
 # #2381: opt-in request-bound signed target evidence, NEVER a generic
 # authenticated receipt freshness or production replay-prevention claim.
@@ -113,14 +128,15 @@ export LAB_STATE_DIR="$LAB_TMP/state"
 export LAB_TRUST_DIR="$LAB_TMP/trust"
 export LAB_PERMIT_DIR="$LAB_TMP/permits"
 export LAB_ISSUER_DIR="$LAB_TMP/native-issuer-private"
+LAB_ORIGIN_DIR="$LAB_TMP/rcc-controlled-source-private"
 REPORT_DIR="${LAB_REPORT_DIR:-artifacts/isolated-enterprise-iam-native-docker/latest}"
 if [[ "${LAB_NATIVE_DURABLE_PG:-0}" == "1" ]]; then
   [[ -n "${LAB_REPORT_DIR:-}" ]] ||
     { echo "DEDICATED_DURABLE_EVIDENCE_DIR_REQUIRED" >&2; exit 2; }
 fi
 mkdir -p "$LAB_CERT_DIR"/{server,scoped,unscoped,public} \
-  "$LAB_STATE_DIR" "$LAB_TRUST_DIR" "$LAB_PERMIT_DIR" "$LAB_ISSUER_DIR" "$REPORT_DIR"
-chmod 0700 "$LAB_TMP" "$LAB_CERT_DIR" "$LAB_STATE_DIR" "$LAB_TRUST_DIR" "$LAB_PERMIT_DIR" "$LAB_ISSUER_DIR" "$LAB_CERT_DIR"/{server,scoped,unscoped,public}
+  "$LAB_STATE_DIR" "$LAB_TRUST_DIR" "$LAB_PERMIT_DIR" "$LAB_ISSUER_DIR" "$REPORT_DIR" "$LAB_ORIGIN_DIR"
+chmod 0700 "$LAB_TMP" "$LAB_CERT_DIR" "$LAB_STATE_DIR" "$LAB_TRUST_DIR" "$LAB_PERMIT_DIR" "$LAB_ISSUER_DIR" "$LAB_ORIGIN_DIR" "$LAB_CERT_DIR"/{server,scoped,unscoped,public}
 
 if [[ "${LAB_TARGET_READONLY_ACK:-0}" == "1" ]]; then
   export LAB_READONLY_SIGNER_DIR="$LAB_TMP/ack-private"
@@ -227,13 +243,29 @@ python3 scripts/enterprise_iam_lab/verify_native_docker.py \
   --database "$LAB_STATE_DIR/iam.sqlite3" --report-dir "$REPORT_DIR" \
   "${IAM_NATIVE_VERIFY_ARGS[@]}"
 
+# #2383 separate controlled-source fixture signer. Source PRIVATE key is
+# hosted only under LAB_ORIGIN_DIR; issuer receives only signed source data
+# plus public key. The selected /v1/decide candidate MUST match it before
+# the native approval and one-time durable authorization consumption.
+if [[ "${LAB_SOURCE_BOUND_IAM_ADMISSION:-0}" == "1" ]]; then
+  python3 -m scripts.enterprise_iam_lab.source_bound_iam_origin \
+    prepare-synthetic-origin --origin-dir "$LAB_ORIGIN_DIR" \
+    --trust-dir "$LAB_TRUST_DIR" \
+    --attestation "$REPORT_DIR/iam_synthetic_source_attestation.json" \
+    > "$REPORT_DIR/iam_source_prepare.json"
+  IAM_SOURCE_BOUND_ARGS=(
+    --source-attestation "$REPORT_DIR/iam_synthetic_source_attestation.json"
+    --source-trust-key "$LAB_TRUST_DIR/origin-public.pem"
+  )
+fi
+
 # CRITICAL: issue native signed approval + consume ONLY when Docker target is
 # healthy and scoped executor is ready; native authorization has a tiny
 # real-clock validity window. Issuer and signer are NOT a Docker service.
 python3 scripts/enterprise_iam_lab/native_docker_issuer.py \
   --phase issue --issuer-dir "$LAB_ISSUER_DIR" --trust-dir "$LAB_TRUST_DIR" \
   --permit-dir "$LAB_PERMIT_DIR" --evidence-dir "$REPORT_DIR" \
-  "${IAM_NATIVE_ISSUE_ARGS[@]}" \
+  "${IAM_NATIVE_ISSUE_ARGS[@]}" "${IAM_SOURCE_BOUND_ARGS[@]}" \
   > "$REPORT_DIR/native_issuer_run.json"
 
 # Keep ALLOW and replay IMMEDIATELY after native consume, before secondary
@@ -405,6 +437,14 @@ elif [[ "${LAB_NATIVE_LOST_ACK:-0}" == "1" ]]; then
     --target-database "$LAB_STATE_DIR/iam.sqlite3"
 fi
 
+if [[ "${LAB_SOURCE_BOUND_IAM_ADMISSION:-0}" == "1" ]]; then
+  python3 -m scripts.enterprise_iam_lab.source_bound_iam_origin \
+    verify-evidence --trust-dir "$LAB_TRUST_DIR" \
+    --attestation "$REPORT_DIR/iam_synthetic_source_attestation.json" \
+    --issuer-receipt "$REPORT_DIR/native_issuer_receipt.json" \
+    --native-bridge "$REPORT_DIR/iam_source_native_bridge_signed.json" \
+    > "$REPORT_DIR/iam_source_admission_verified.json"
+fi
 python3 scripts/enterprise_iam_lab/verify_native_docker.py \
   --phase post-native --compose "$LAB_TMP/config.json" \
   --database "$LAB_STATE_DIR/iam.sqlite3" \

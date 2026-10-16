@@ -34,6 +34,7 @@ from cryptography.hazmat.primitives.serialization import (
 )
 
 from scripts.enterprise_iam_lab import native_permit_bridge as bridge
+from scripts.enterprise_iam_lab import source_bound_iam_origin as origin
 from scripts.enterprise_iam_lab.signed_permit import (
     EXPECTED, canonical, sign_permit, verify_permit,
 )
@@ -81,7 +82,7 @@ def prepare(issuer_dir: Path, trust_dir: Path) -> None:
     }, sort_keys=True))
 
 
-def _native_fixture(issuer_dir: Path):
+def _native_fixture(issuer_dir: Path, *, source_payload: dict | None = None):
     capture_path = issuer_dir / ("capture-" + secrets.token_hex(8) + ".json")
     subprocess.run(
         [
@@ -95,6 +96,11 @@ def _native_fixture(issuer_dir: Path):
     assert captured["candidate"]["intended_action"] == bridge.ACTION
     assert captured["candidate"]["required_human_approval"] is True
     assert captured["candidate"]["required_authority"] == [EXPECTED["scope"]]
+    # Before creating any Human Approval or native authorization, require
+    # the independently signed source candidate to equal /v1/decide's choice.
+    # The source input itself is never the native approval.
+    if source_payload is not None:
+        origin.verify_selected_candidate(source_payload, captured["candidate"])
     now = datetime.fromisoformat(captured["observed_at"])
     assert now.tzinfo is not None
     promotion = build_canonical_verified_decision_promotion_packet(
@@ -139,7 +145,9 @@ def _native_fixture(issuer_dir: Path):
 
 async def issue(issuer_dir: Path, trust_dir: Path, permit_dir: Path,
                 evidence_dir: Path, *, durable_postgres: bool = False,
-                persist_effect_in_flight: bool = False) -> dict:
+                persist_effect_in_flight: bool = False,
+                source_attestation: Path | None = None,
+                source_trust_key: Path | None = None) -> dict:
     """Use only trusted exact store classes; PostgreSQL is mandatory in durable mode."""
     if type(durable_postgres) is not bool:
         raise ValueError("IAM_NATIVE_STORE_MODE_INVALID")
@@ -149,6 +157,21 @@ async def issue(issuer_dir: Path, trust_dir: Path, permit_dir: Path,
         ("postgresql://", "postgresql+psycopg://")
     ):
         raise ValueError("IAM_NATIVE_REAL_POSTGRES_REQUIRED")
+    # Explicit test-only source-bound gate; a caller cannot silently claim
+    # RCC origin by supplying one file, using an in-memory store, or passing a
+    # digest without an independent signature and pinned verifier.
+    if (source_attestation is None) != (source_trust_key is None):
+        raise ValueError("IAM2383_SOURCE_ATTESTATION_AND_TRUST_KEY_REQUIRED")
+    source_payload = None
+    if source_attestation is not None:
+        if not durable_postgres or not persist_effect_in_flight:
+            raise ValueError("IAM2383_SOURCE_REQUIRES_NATIVE_DURABLE_EFFECT_PATH")
+        if not source_attestation.is_file() or not source_trust_key.is_file():
+            raise ValueError("IAM2383_SOURCE_TRUST_OR_ATTESTATION_MISSING")
+        source_payload = origin.verify_origin(
+            json.loads(source_attestation.read_text(encoding="utf-8")),
+            source_trust_key.read_bytes(), now=datetime.now(timezone.utc),
+        )
     key_file = issuer_dir / KEY_NAME
     if not key_file.is_file() or not permit_dir.is_dir() or not evidence_dir.is_dir():
         raise ValueError("prepared trusted issuer and output dirs required")
@@ -160,13 +183,18 @@ async def issue(issuer_dir: Path, trust_dir: Path, permit_dir: Path,
     )
     assert (trust_dir / PUBLIC_NAME).read_bytes() == public
 
-    artifact, issuance, captured = _native_fixture(issuer_dir)
+    artifact, issuance, captured = _native_fixture(
+        issuer_dir, source_payload=source_payload,
+    )
     # Use the REAL wall clock for the Docker target. Never patch its clock.
     earliest = issuance["governance_inputs"].verification_now + timedelta(seconds=1)
     actual = datetime.now(timezone.utc)
     if actual < earliest:
         time.sleep((earliest - actual).total_seconds())
     actual = datetime.now(timezone.utc)
+    if source_payload is not None:
+        # Admission must remain fresh at actual authorization issuance.
+        origin.validate_source(source_payload, now=actual)
     expires = datetime.fromisoformat(artifact.valid_until)
     if expires - actual < timedelta(seconds=6):
         raise ValueError("NATIVE_WINDOW_TOO_SHORT_FOR_DOCKER_TRANSPORT")
@@ -274,6 +302,30 @@ async def issue(issuer_dir: Path, trust_dir: Path, permit_dir: Path,
         "production_claim": False,
         "external_iam_provider_called": False,
     }
+    if source_payload is not None:
+        # This signed bridge maps the verified source to already-native-
+        # consumed identities. It is EVIDENCE, never additional authority;
+        # the target Permit v1 does not enforce the source digests.
+        bridge_receipt = origin.signed_native_bridge(
+            source_payload, receipt, signer,
+        )
+        origin.verify_native_bridge(bridge_receipt, public,
+                                    source_payload, receipt)
+        (evidence_dir / "iam_source_native_bridge_signed.json").write_text(
+            json.dumps(bridge_receipt, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        receipt.update({
+            "source_origin_signature_verified": True,
+            "source_selected_candidate_verified_before_issuance": True,
+            "source_original_request_digest":
+                source_payload["original_request_digest"],
+            "source_candidate_digest": source_payload["candidate_digest"],
+            "source_attestation_digest": origin.sha(source_payload),
+            "source_bridge_signed_evidence_only": True,
+            "target_enforces_source_digest": False,
+            "actual_rcc_416_candidate_executed": False,
+        })
     (evidence_dir / RECEIPT).write_text(
         json.dumps(receipt, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
@@ -289,6 +341,8 @@ def main() -> None:
     parser.add_argument("--evidence-dir", type=Path)
     parser.add_argument("--durable-postgres", action="store_true")
     parser.add_argument("--persist-effect-in-flight", action="store_true")
+    parser.add_argument("--source-attestation", type=Path)
+    parser.add_argument("--source-trust-key", type=Path)
     args = parser.parse_args()
     if args.phase == "prepare":
         prepare(args.issuer_dir, args.trust_dir)
@@ -300,6 +354,8 @@ def main() -> None:
         args.issuer_dir, args.trust_dir, args.permit_dir, args.evidence_dir,
         durable_postgres=args.durable_postgres,
         persist_effect_in_flight=args.persist_effect_in_flight,
+        source_attestation=args.source_attestation,
+        source_trust_key=args.source_trust_key,
     ))
     print(json.dumps({
         "result": receipt["result"], "issuer_mode": receipt["issuer_mode"],
