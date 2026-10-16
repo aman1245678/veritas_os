@@ -18,6 +18,9 @@ import hashlib
 import json
 from pathlib import Path
 
+from scripts.enterprise_iam_lab.durable_challenge_registry import (
+    ChallengeBoundPostgresEffectStore, digest as challenge_digest, lookup as challenge_lookup,
+)
 from scripts.enterprise_iam_lab.reconcile_native_lost_ack import (
     read_native_issuer, require, require_discarded_response,
 )
@@ -220,7 +223,10 @@ class SyntheticSignedMtlsAckVerifier:
 
 async def perform(*, folder: Path, trust: Path, permits: Path,
                   target_public: Path, compose_config: Path,
-                  freshness_challenge: bool = False) -> dict:
+                  freshness_challenge: bool = False,
+                  durable_challenge: bool = False) -> dict:
+    require(not durable_challenge or freshness_challenge,
+            "IAM2382_DURABLE_REQUIRES_FRESHNESS")
     # Neither this function nor the signer-backed verifier can open target
     # SQLite: NO --target-database path, sqlite3 connection, or target mount.
     require_discarded_response(folder)
@@ -254,7 +260,14 @@ async def perform(*, folder: Path, trust: Path, permits: Path,
             "IAM2380_TARGET_SIGNER_MUST_DIFFER_FROM_ISSUER")
 
     native_store = PostgresAtomicAuthorizationConsumptionStore()
-    effect_store = PostgresAtomicEffectStateStore()
+    effect_store = (
+        ChallengeBoundPostgresEffectStore(
+            nonce_sha256=challenge_digest(challenge),
+            permit_id=permit["permit_id"],
+            authorization_id=permit["authorization_id"],
+            operation_id=receipt["consumption_id"],
+        ) if durable_challenge else PostgresAtomicEffectStateStore()
+    )
     try:
         native = await native_store.get(permit["authorization_id"])
         require(native is not None, "IAM2380_MISSING_NATIVE_PG_CONSUMPTION")
@@ -299,6 +312,16 @@ async def perform(*, folder: Path, trust: Path, permits: Path,
             verifier=verifier, effect_store=effect_store, updated_at=now,
         )
         persisted = await effect_store.get(native.consumption_id)
+        consumed_nonce = (await challenge_lookup(challenge_digest(challenge))
+                          if durable_challenge else None)
+        if durable_challenge:
+            require(consumed_nonce is not None
+                    and consumed_nonce["state"] == "CONSUMED"
+                    and consumed_nonce["operation_id"] == native.consumption_id
+                    and consumed_nonce["authorization_id"] == permit["authorization_id"]
+                    and consumed_nonce["permit_id"] == permit["permit_id"]
+                    and consumed_nonce["evidence_hash"] == persisted.reconciliation_evidence_hash,
+                    "IAM2382_NONCE_AND_EFFECT_NOT_ATOMICALLY_COMMITTED")
         require(
             confirmed == persisted
             and confirmed.state == EffectExecutionState.CONFIRMED_EFFECT
@@ -328,6 +351,8 @@ async def perform(*, folder: Path, trust: Path, permits: Path,
             "source_type": verifier.source_type,
             "source_identity": SOURCE_IDENTITY,
             "freshness_challenge_verified": freshness_challenge,
+            "durable_challenge_consumed_with_effect": durable_challenge,
+            "durable_challenge_replay_allow": False,
             "freshness_challenge_digest": hashlib.sha256(
                 challenge.encode("ascii")
             ).hexdigest() if freshness_challenge else None,
@@ -361,12 +386,14 @@ def main() -> None:
     parser.add_argument("--target-public-key", required=True, type=Path)
     parser.add_argument("--compose-config", required=True, type=Path)
     parser.add_argument("--freshness-challenge", action="store_true")
+    parser.add_argument("--durable-challenge", action="store_true")
     args = parser.parse_args()
     result = asyncio.run(perform(
         folder=args.report_dir, trust=args.trust_dir,
         permits=args.permit_dir, target_public=args.target_public_key,
         compose_config=args.compose_config,
         freshness_challenge=args.freshness_challenge,
+        durable_challenge=args.durable_challenge,
     ))
     (args.report_dir / "iam_reconciliation_reconcile.json").write_text(
         json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8"
