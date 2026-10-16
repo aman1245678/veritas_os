@@ -1,0 +1,125 @@
+name: "Isolated IAM Target-Signed Read-Only mTLS Acknowledgement V1"
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/isolated-iam-target-readonly-ack-v1.yml"
+      - "compose.enterprise-iam-readonly-ack-2379.override.yml"
+      - "compose.enterprise-iam-permit-transport.yml"
+      - "scripts/enterprise_iam_lab/target_service.py"
+      - "scripts/enterprise_iam_lab/target_readonly_receipt.py"
+      - "scripts/enterprise_iam_lab/readonly_ack_probe.py"
+      - "scripts/enterprise_iam_lab/verify_readonly_ack.py"
+      - "scripts/enterprise_iam_lab/run_native_docker.sh"
+      - "tests/quality/test_iam_target_readonly_ack_v1.py"
+      - "docs/ISOLATED_IAM_TARGET_SIGNED_READONLY_ACK_V1.md"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: isolated-iam-target-readonly-ack-v1-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  synthetic-target-readonly-ack:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: veritas
+          POSTGRES_PASSWORD: veritas_test
+          POSTGRES_DB: veritas_test
+        options: >-
+          --health-cmd "pg_isready -U veritas"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+    env:
+      PYTHONUNBUFFERED: "1"
+      PYTHONDONTWRITEBYTECODE: "1"
+      VERITAS_DATABASE_URL: "postgresql+psycopg://veritas:veritas_test@localhost:5432/veritas_test"
+      VERITAS_DB_POOL_MIN_SIZE: "1"
+      LAB_NATIVE_DURABLE_PG: "1"
+      LAB_NATIVE_LOST_ACK: "0"
+      LAB_NATIVE_PROCESS_RESTART: "0"
+      LAB_TARGET_READONLY_ACK: "1"
+      LAB_REPORT_DIR: "artifacts/isolated-enterprise-iam-target-readonly-ack/latest"
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install same real native source and security-test dependencies
+        run: |
+          set -euo pipefail
+          python -m pip install -e ".[dev,signing]" "psycopg[binary]" psycopg-pool alembic
+      - name: Migrate fresh native PostgreSQL consumption store
+        run: alembic upgrade head
+      - name: Reject forged acknowledgements, fake scope, missing rows and target signer substitution
+        run: |
+          set -euo pipefail
+          python -m pytest -q \
+            tests/quality/test_iam_target_readonly_ack_v1.py \
+            tests/quality/test_iam_native_postgres_docker_v1.py \
+            tests/quality/test_iam_native_docker_verifier_v1.py
+      - name: Exercise signed target-only GET over real Docker mTLS and validate against PostgreSQL
+        run: bash scripts/enterprise_iam_lab/run_native_docker.sh
+      - name: Check exact bounded target-owned receipt and negative mTLS observations
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          d=Path("artifacts/isolated-enterprise-iam-target-readonly-ack/latest")
+          r=json.loads((d/"iam_target_readonly_ack_verification.json").read_text())
+          normal=json.loads((d/"readonly_valid.json").read_text())
+          wrong=json.loads((d/"readonly_wrong_scope.json").read_text())
+          missing=json.loads((d/"readonly_missing.json").read_text())
+          certless=json.loads((d/"readonly_no_certificate.json").read_text())
+          underlying=json.loads((d/"verification_post_native.json").read_text())
+          assert r["result"]=="PASS"
+          assert r["status"]=="SYNTHETIC_SIGNED_TARGET_MTLS_READONLY_RECEIPT_NOT_PRODUCTION_PROVEN"
+          assert r["signed_target_commit_verified"] is True
+          assert r["target_signer_distinct_from_native_issuer"] is True
+          assert r["mTLS_reader_identity_required"] is True
+          assert r["reader_has_no_target_sqlite"] is True
+          assert r["reader_has_no_effect_permit"] is True
+          assert r["reader_has_no_target_signer_private_key"] is True
+          assert r["missing_target_effect_remains_unknown"] is True
+          assert r["real_postgres_native_authorization_consumption_verified"] is True
+          assert r["unknown_effect_promoted_to_confirmed"] is False
+          assert r["independent_operator_key_custody"] is False
+          assert r["target_sqlite_read_by_verifier"] is False
+          assert r["production_claim"] is False
+          assert normal["status"]==200 and normal["result"]=="PASS"
+          assert wrong["observed_http_status"]==403 and wrong["result"]=="PASS"
+          assert missing["observed_http_status"]==404 and missing["result"]=="PASS"
+          assert certless["observed_http_status"] is None and certless["result"]=="PASS"
+          assert underlying["native_consumption_store_durable"] is True
+          assert underlying["native_postgres_consumption_rows"]==1
+          assert underlying["target_grants"]==1
+          assert underlying["replay_rejected"] is True
+          assert underlying["production_claim"] is False
+          print("IAM_2379_TARGET_SIGNED_READONLY_MTLS_RECEIPT_BOUNDED_PASS_NOT_PROVEN")
+          PY
+          cd "$LAB_REPORT_DIR"
+          find . -maxdepth 1 -name '*.json' -print0 | sort -z | xargs -0 sha256sum > manifest.sha256
+          sha256sum --check manifest.sha256
+      - name: Upload sanitized read-only receipts, not target SQLite, secrets or signed effect permits
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: isolated-iam-target-signed-readonly-mtls-v1
+          path: artifacts/isolated-enterprise-iam-target-readonly-ack/latest/
+          retention-days: 30
+          if-no-files-found: warn
