@@ -155,6 +155,7 @@ def verify(
     trust_dir: Path | None = None, permit_dir: Path | None = None,
     source_sha: str = "", expected_sha: str = "",
     require_native_postgres: bool = False,
+    lost_ack_recovery: bool = False,
 ) -> dict:
     top = verify_topology(config)
     assert top["target_verifier_key_not_mounted_on_executor_or_agent"]
@@ -167,12 +168,25 @@ def verify(
         return pre
 
     assert phase == "post-native"
+    assert not lost_ack_recovery or require_native_postgres
     assert trust_dir is not None and permit_dir is not None
     assert re.fullmatch(r"[0-9a-f]{40}", source_sha)
     assert source_sha == expected_sha
 
     verify_denials(folder)
-    _require_http(_load(folder / "allow.json"), "allow", 201, "committed")
+    if lost_ack_recovery:
+        # This is explicitly NOT an HTTP 201 observation. The target ledger
+        # and real PostgreSQL effect state must prove the result separately.
+        discarded = _load(folder / "allow_lost_ack.json")
+        assert discarded["case_id"] == "allow-no-ack"
+        assert discarded["result"] == "PASS"
+        assert discarded["observed_failure_kind"] == "HTTP_RESPONSE_NOT_OBSERVED"
+        assert discarded["observed_http_status"] is None
+        assert discarded["request_send_completed"] is True
+        assert discarded["acknowledgement_discarded"] is True
+        assert discarded["target_effect_claimed_from_transport"] is False
+    else:
+        _require_http(_load(folder / "allow.json"), "allow", 201, "committed")
     _require_http(_load(folder / "replay.json"), "replay", 409, "permit_replayed")
 
     prep = _load(folder / "native_issuer_prepare.json")
@@ -247,11 +261,59 @@ def verify(
         _verified_native_postgres_join(receipt, verified, database)
         if require_native_postgres else {}
     )
+    reconciliation_report = {}
+    if lost_ack_recovery:
+        unknown = _load(folder / "iam_reconciliation_mark_unknown.json")
+        confirmation = _load(folder / "iam_reconciliation_reconcile.json")
+        assert unknown["result"] == confirmation["result"] == "PASS"
+        assert unknown["effect_state"] == "EFFECT_UNKNOWN"
+        assert unknown["revision"] == 2
+        assert confirmation["effect_state_before"] == "EFFECT_UNKNOWN"
+        assert confirmation["effect_state_after"] == "CONFIRMED_EFFECT"
+        assert confirmation["revision"] == 3
+        assert confirmation["terminal_state_immutable"] is True
+        assert confirmation["target_post_retried"] is False
+        assert confirmation["permit_reissued"] is False
+        assert confirmation["production_claim"] is False
+        assert confirmation["operation_id"] == unknown["operation_id"] == receipt["consumption_id"]
+        import psycopg
+        from veritas_os.storage.db import _normalize_dsn
+        from veritas_os.policy.bind_effect_reconciliation import (
+            EffectStateRecord, EffectExecutionState, _record_hash_valid,
+        )
+        with psycopg.connect(_normalize_dsn(os.environ["VERITAS_DATABASE_URL"]), connect_timeout=5) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT record FROM bind_effect_states WHERE operation_id=%s",
+                    (receipt["consumption_id"],),
+                )
+                rows = cur.fetchall()
+        assert len(rows) == 1, "DURABLE_EFFECT_STATE_MISSING"
+        state_record = EffectStateRecord.model_validate(rows[0][0])
+        assert _record_hash_valid(state_record)
+        assert state_record.state == EffectExecutionState.CONFIRMED_EFFECT
+        assert state_record.revision == 3
+        assert state_record.authorization_id == verified["authorization_id"]
+        assert state_record.consumption_id == receipt["consumption_id"]
+        assert state_record.execution_intent_id == verified["execution_intent_id"]
+        assert state_record.reconciliation_evidence_hash is not None
+        reconciliation_report = {
+            "lost_acknowledgement_response_unobserved": True,
+            "durable_effect_state_before": "EFFECT_UNKNOWN",
+            "durable_effect_state_after": "CONFIRMED_EFFECT",
+            "terminal_immutable": True,
+            "mutation_retried": False,
+            "native_permit_reissued": False,
+            "target_ledger_consulted_without_post": True,
+        }
+
     return {
         "result": "PASS",
         "phase": "post-native",
         "proof_status": (
-            "SYNTHETIC_NATIVE_POSTGRES_CONSUME_TO_REAL_DOCKER_MTLS_NOT_PROVEN"
+            "SYNTHETIC_NATIVE_POSTGRES_LOST_ACK_TARGET_RECONCILIATION_NOT_PROVEN"
+            if lost_ack_recovery
+            else "SYNTHETIC_NATIVE_POSTGRES_CONSUME_TO_REAL_DOCKER_MTLS_NOT_PROVEN"
             if require_native_postgres
             else "SYNTHETIC_NATIVE_CONSUME_TO_REAL_DOCKER_MTLS_WITH_IN_MEMORY_STORE_NOT_PROVEN"
         ),
@@ -259,6 +321,7 @@ def verify(
         "native_signed_approval_and_consumption_observed": True,
         "native_consumption_store_durable": require_native_postgres,
         **postgres_evidence,
+        **reconciliation_report,
         "target_native_permit_binding_verified": True,
         "real_mtls_allowed_exactly_once": True,
         "replay_rejected": True,
@@ -283,6 +346,7 @@ def main() -> None:
     parser.add_argument("--source-sha", default="")
     parser.add_argument("--expected-sha", default="")
     parser.add_argument("--require-native-postgres", action="store_true")
+    parser.add_argument("--lost-ack-recovery", action="store_true")
     args = parser.parse_args()
     result = verify(
         phase=args.phase, folder=args.report_dir,
@@ -290,6 +354,7 @@ def main() -> None:
         trust_dir=args.trust_dir, permit_dir=args.permit_dir,
         source_sha=args.source_sha, expected_sha=args.expected_sha,
         require_native_postgres=args.require_native_postgres,
+        lost_ack_recovery=args.lost_ack_recovery,
     )
     output = args.report_dir / ("verification_" + args.phase.replace("-", "_") + ".json")
     output.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8")

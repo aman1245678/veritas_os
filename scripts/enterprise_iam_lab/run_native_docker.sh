@@ -23,6 +23,18 @@ else
   exit 2
 fi
 
+# Lost-ack proof requires the durable PostgreSQL path, and is opt-in only.
+# Baseline #2375 and #2376 execution remain unchanged.
+if [[ "${LAB_NATIVE_LOST_ACK:-0}" == "1" ]]; then
+  [[ "${LAB_NATIVE_DURABLE_PG:-0}" == "1" ]] ||
+    { echo "LOST_ACK_REQUIRES_NATIVE_POSTGRES" >&2; exit 2; }
+  IAM_NATIVE_ISSUE_ARGS+=(--persist-effect-in-flight)
+  IAM_NATIVE_VERIFY_ARGS+=(--lost-ack-recovery)
+elif [[ "${LAB_NATIVE_LOST_ACK:-0}" != "0" ]]; then
+  echo "INVALID_LOST_ACK_MODE" >&2
+  exit 2
+fi
+
 export LAB_UID="$(id -u)"
 export LAB_GID="$(id -g)"
 export LAB_PROJECT="veritas-iam-native-$(date +%s)-${BASHPID}"
@@ -133,8 +145,21 @@ python3 scripts/enterprise_iam_lab/native_docker_issuer.py \
 
 # Keep ALLOW and replay IMMEDIATELY after native consume, before secondary
 # probes, to avoid substituting a longer-lived synthetic permit.
-LAB_CASE=allow "${COMPOSE[@]}" --profile probes run --rm --no-deps -T scoped-executor \
-  > "$REPORT_DIR/allow.json"
+if [[ "${LAB_NATIVE_LOST_ACK:-0}" == "1" ]]; then
+  # One genuine mTLS POST, then deliberately close before reading its reply.
+  # Success is NOT inferred from this step. Never retry the mutation.
+  LAB_CASE=allow-no-ack "${COMPOSE[@]}" --profile probes run --rm --no-deps -T scoped-executor \
+    > "$REPORT_DIR/allow_lost_ack.json"
+  # Separate Python interpreter/process: persist a fail-closed UNKNOWN from
+  # existing durable IN_FLIGHT, never from the expected success text.
+  python3 -m scripts.enterprise_iam_lab.reconcile_native_lost_ack \
+    --phase mark-unknown --report-dir "$REPORT_DIR" \
+    --trust-dir "$LAB_TRUST_DIR" --permit-dir "$LAB_PERMIT_DIR" \
+    --target-database "$LAB_STATE_DIR/iam.sqlite3"
+else
+  LAB_CASE=allow "${COMPOSE[@]}" --profile probes run --rm --no-deps -T scoped-executor \
+    > "$REPORT_DIR/allow.json"
+fi
 LAB_CASE=replay "${COMPOSE[@]}" --profile probes run --rm --no-deps -T scoped-executor \
   > "$REPORT_DIR/replay.json"
 
@@ -146,6 +171,15 @@ LAB_CASE=wrong-signer "${COMPOSE[@]}" --profile probes run --rm --no-deps -T sco
   > "$REPORT_DIR/no_client_cert.json"
 "${COMPOSE[@]}" --profile probes run --rm --no-deps -T unscoped-probe \
   > "$REPORT_DIR/unscoped.json"
+
+if [[ "${LAB_NATIVE_LOST_ACK:-0}" == "1" ]]; then
+  # Separate process after the response was deliberately discarded. Only a
+  # fresh, read-only lookup of the target's own ledger may close UNKNOWN.
+  python3 -m scripts.enterprise_iam_lab.reconcile_native_lost_ack \
+    --phase reconcile --report-dir "$REPORT_DIR" \
+    --trust-dir "$LAB_TRUST_DIR" --permit-dir "$LAB_PERMIT_DIR" \
+    --target-database "$LAB_STATE_DIR/iam.sqlite3"
+fi
 
 python3 scripts/enterprise_iam_lab/verify_native_docker.py \
   --phase post-native --compose "$LAB_TMP/config.json" \

@@ -67,6 +67,49 @@ def agent_direct() -> int:
         )
 
 
+def send_without_reading_ack() -> int:
+    """Send one real mTLS POST then discard the HTTP response.
+
+    Socket send completion is *not* proof that a target effect committed.
+    The independent post-restart ledger reader must determine that later.
+    Do not retry the write or inspect any status/body from the response.
+    """
+    context = ssl.create_default_context(cafile=CA)
+    context.load_cert_chain(CLIENT_CRT, CLIENT_KEY)
+    envelope = json.loads(
+        (Path("/run/lab/permits") / "valid.json").read_text(encoding="utf-8")
+    )
+    data = json.dumps(
+        {"role": "admin", "permit": envelope}, sort_keys=True
+    ).encode("utf-8")
+    connection = http.client.HTTPSConnection(
+        "iam-target", 8443, context=context, timeout=6
+    )
+    try:
+        connection.request(
+            "POST", PATH, body=data, headers={"Content-Type": "application/json"}
+        )
+    except (OSError, ssl.SSLError, http.client.HTTPException):
+        return report(
+            "allow-no-ack", passed=False,
+            kind="REQUEST_SEND_FAILED_OUTCOME_UNKNOWN",
+            details={"request_send_completed": False},
+        )
+    finally:
+        # IMPORTANT: deliberately never call getresponse() or read().
+        connection.close()
+    return report(
+        "allow-no-ack", passed=True,
+        kind="HTTP_RESPONSE_NOT_OBSERVED",
+        details={
+            "request_send_completed": True,
+            "observed_http_status": None,
+            "acknowledgement_discarded": True,
+            "target_effect_claimed_from_transport": False,
+        },
+    )
+
+
 def send(case: str) -> int:
     if case not in (*EXPECTED, "no-client-cert"):
         return report(case, passed=False, kind="UNKNOWN_CASE")
@@ -124,4 +167,8 @@ def send(case: str) -> int:
 
 if __name__ == "__main__":
     case = os.environ.get("CASE", "")
-    raise SystemExit(agent_direct() if case == "agent-direct" else send(case))
+    raise SystemExit(
+        agent_direct() if case == "agent-direct" else
+        send_without_reading_ack() if case == "allow-no-ack" else
+        send(case)
+    )
