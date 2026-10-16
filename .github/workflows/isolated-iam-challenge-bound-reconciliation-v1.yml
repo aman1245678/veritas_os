@@ -78,6 +78,7 @@ jobs:
           set -euo pipefail
           python -m pytest -q \
             tests/quality/test_iam_signed_target_ack_reconciliation_v1.py \
+            tests/quality/test_iam_target_ack_challenge_freshness_v1.py \
             tests/quality/test_iam_target_readonly_ack_v1.py \
             tests/quality/test_iam_native_lost_ack_reconciliation_v1.py \
             tests/quality/test_iam_native_postgres_docker_v1.py \
