@@ -140,7 +140,8 @@ def test_worker_must_kill_itself_only_after_durable_checkpoint():
 
 def test_source_does_not_change_authorization_or_iam_target_effect_code():
     src = Path("scripts/enterprise_iam_lab/native_process_restart_probe.py").read_text("utf-8")
-    assert "POST " not in src
+    assert "HTTPSConnection(" not in src
+    assert "urllib.request.Request(" not in src
     assert "issue_iam_permit_after_native_consumption" not in src
     assert "consume_once(" not in src
     assert "LAB_ALLOW_MUTATIONS" not in src
