@@ -16,7 +16,7 @@ from pathlib import Path
 import sqlite3
 import ssl
 from threading import Lock
-from urllib.parse import quote, unquote
+from urllib.parse import quote, unquote, urlsplit
 
 TARGET_PATH = "/v1/iam/users/contractor-001/roles"
 TARGET_USER = "contractor-001"
@@ -144,7 +144,8 @@ class Handler(BaseHTTPRequestHandler):
             self.respond(404, "not_found")
             return
         from target_readonly_receipt import (
-            PREFIX, UnknownEffect, committed_from_target, sign_committed,
+            PREFIX, CHALLENGE_PATTERN, UnknownEffect, challenge_bound_committed,
+            committed_from_target, sign_committed,
         )
         if not self.path.startswith(PREFIX):
             self.respond(404, "not_found")
@@ -156,12 +157,29 @@ class Handler(BaseHTTPRequestHandler):
             self.respond(403, "reconciliation_reader_not_authorized")
             return
         suffix = self.path[len(PREFIX):]
-        ref = unquote(suffix, errors="strict")
-        if quote(ref, safe="") != suffix:
+        # Only the explicit #2381 profile accepts a request-bound random nonce.
+        # Earlier #2379/#2380 unsigned challenge path semantics stay identical.
+        freshness = os.getenv("LAB_TEST_READONLY_FRESHNESS", "0") == "1"
+        parsed = urlsplit(suffix)
+        ref = unquote(parsed.path, errors="strict")
+        if quote(ref, safe="") != parsed.path or parsed.fragment:
+            self.respond(400, "reconciliation_reference_not_canonical")
+            return
+        challenge = ""
+        if freshness:
+            if (not parsed.query.startswith("challenge=")
+                    or not CHALLENGE_PATTERN.fullmatch(parsed.query[len("challenge="):])):
+                self.respond(400, "reconciliation_challenge_required")
+                return
+            challenge = parsed.query[len("challenge="):]
+        elif parsed.query:
             self.respond(400, "reconciliation_reference_not_canonical")
             return
         try:
-            payload = committed_from_target(DB_PATH, ref)
+            payload = (
+                challenge_bound_committed(DB_PATH, ref, challenge)
+                if freshness else committed_from_target(DB_PATH, ref)
+            )
         except ValueError:
             # No signed NO_EFFECT response is ever issued from absence.
             self.respond(404, "effect_not_confirmed")
