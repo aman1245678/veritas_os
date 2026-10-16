@@ -24,6 +24,7 @@ EXPECTED = {
     "missing-permit": (400, "invalid_mutation"),
     "tamper": (403, "permit_denied"),
     "wrong-signer": (403, "permit_denied"),
+    "legacy-v1": (403, "permit_denied"),
     "unscoped": (403, "target_scope_denied"),
 }
 
@@ -123,6 +124,7 @@ def send(case: str) -> int:
         body = {"role": "admin"}
     else:
         variant = (
+            "legacy-v1" if case == "legacy-v1" else
             "tampered" if case == "tamper" else
             "wrong-signer" if case == "wrong-signer" else "valid"
         )
