@@ -1,0 +1,169 @@
+name: "Isolated IAM Durable Challenge Single-Use CAS V1"
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/isolated-iam-durable-challenge-v1.yml"
+      - "alembic/versions/0011_iam_reconciliation_challenge.py"
+      - "scripts/enterprise_iam_lab/durable_challenge_registry.py"
+      - "tests/quality/test_iam_durable_challenge_v1.py"
+      - ".github/workflows/isolated-iam-signed-mtls-reconciliation-v1.yml"
+      - "scripts/enterprise_iam_lab/reconcile_signed_target_ack.py"
+      - "scripts/enterprise_iam_lab/reconcile_native_lost_ack.py"
+      - "scripts/enterprise_iam_lab/verify_readonly_ack.py"
+      - "scripts/enterprise_iam_lab/target_readonly_receipt.py"
+      - "scripts/enterprise_iam_lab/readonly_ack_probe.py"
+      - "scripts/enterprise_iam_lab/run_native_docker.sh"
+      - "scripts/enterprise_iam_lab/verify_native_docker.py"
+      - "tests/quality/test_iam_signed_target_ack_reconciliation_v1.py"
+      - "tests/quality/test_iam_target_ack_challenge_freshness_v1.py"
+      - "compose.enterprise-iam-readonly-ack-2379.override.yml"
+      - "compose.enterprise-iam-permit-transport.yml"
+      - "docs/ISOLATED_IAM_SIGNED_ACK_RECONCILIATION_CAS_V1.md"
+      - "docs/ISOLATED_IAM_CHALLENGE_BOUND_ACK_FRESHNESS_V1.md"
+      - "veritas_os/policy/bind_effect_reconciliation.py"
+      - "veritas_os/policy/live_adapter_bind_authorization_consumption_store.py"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: isolated-iam-durable-challenge-v1-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  synthetic-durable-challenge-reconciliation:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: veritas
+          POSTGRES_PASSWORD: veritas_test
+          POSTGRES_DB: veritas_test
+        options: >-
+          --health-cmd "pg_isready -U veritas"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+    env:
+      PYTHONUNBUFFERED: "1"
+      PYTHONDONTWRITEBYTECODE: "1"
+      VERITAS_DATABASE_URL: "postgresql+psycopg://veritas:veritas_test@localhost:5432/veritas_test"
+      VERITAS_DB_POOL_MIN_SIZE: "1"
+      LAB_NATIVE_DURABLE_PG: "1"
+      LAB_NATIVE_LOST_ACK: "1"
+      LAB_NATIVE_PROCESS_RESTART: "0"
+      LAB_TARGET_READONLY_ACK: "1"
+      LAB_NATIVE_SIGNED_ACK_RECONCILE: "1"
+      LAB_TARGET_ACK_FRESHNESS: "1"
+      LAB_DURABLE_CHALLENGE: "1"
+      LAB_REPORT_DIR: "artifacts/isolated-enterprise-iam-durable-challenge/latest"
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install existing native PG and signature test dependencies
+        run: |
+          set -euo pipefail
+          python -m pip install -e ".[dev,signing]" "psycopg[binary]" psycopg-pool alembic
+      - name: Migrate clean native PostgreSQL consumption and effect-state tables
+        run: alembic upgrade head
+      - name: Reject signature substitution, wrong lineage, fake no-effect, and missing PG
+        run: |
+          set -euo pipefail
+          python -m pytest -q \
+            tests/quality/test_iam_signed_target_ack_reconciliation_v1.py \
+            tests/quality/test_iam_durable_challenge_v1.py \
+            tests/quality/test_iam_target_ack_challenge_freshness_v1.py \
+            tests/quality/test_iam_target_readonly_ack_v1.py \
+            tests/quality/test_iam_native_lost_ack_reconciliation_v1.py \
+            tests/quality/test_iam_native_postgres_docker_v1.py \
+            tests/quality/test_iam_native_docker_verifier_v1.py
+      - name: Real Docker signed GET and native PostgreSQL EFFECT_UNKNOWN to CONFIRMED_EFFECT CAS
+        run: bash scripts/enterprise_iam_lab/run_native_docker.sh
+      - name: Cross-check signed target receipt, durable CAS, and no duplicate mutation
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          folder=Path("artifacts/isolated-enterprise-iam-durable-challenge/latest")
+          report=json.loads((folder/"verification_post_native.json").read_text())
+          unknown=json.loads((folder/"iam_reconciliation_mark_unknown.json").read_text())
+          confirmed=json.loads((folder/"iam_reconciliation_reconcile.json").read_text())
+          normal=json.loads((folder/"readonly_valid.json").read_text())
+          unscoped=json.loads((folder/"readonly_wrong_scope.json").read_text())
+          missing=json.loads((folder/"readonly_missing.json").read_text())
+          certless=json.loads((folder/"readonly_no_certificate.json").read_text())
+          assert report["result"]==unknown["result"]==confirmed["result"]=="PASS"
+          assert report["proof_status"]=="SYNTHETIC_NATIVE_POSTGRES_SIGNED_MTLS_ACK_CAS_NOT_PRODUCTION_PROVEN"
+          assert unknown["effect_state"]=="EFFECT_UNKNOWN"
+          assert confirmed["effect_state_before"]=="EFFECT_UNKNOWN"
+          assert confirmed["effect_state_after"]=="CONFIRMED_EFFECT"
+          assert confirmed["revision"]==3
+          assert confirmed["freshness_challenge_verified"] is True
+          assert confirmed["durable_challenge_consumed_with_effect"] is True
+          assert confirmed["durable_challenge_replay_allow"] is False
+          registered=json.loads((folder/"iam_challenge_registered.json").read_text())
+          consumed=json.loads((folder/"iam_challenge_consumed.json").read_text())
+          assert registered["schema"]==consumed["schema"]=="iam-2382-durable-challenge/v1"
+          assert registered["state"]=="ISSUED" and consumed["state"]=="CONSUMED"
+          assert registered["challenge_sha256"]==consumed["challenge_sha256"]
+          assert registered["production_claim"] is False and consumed["production_claim"] is False
+          assert confirmed["target_ack_freshness_bounded_seconds"]==120
+          assert confirmed["cross_host_replay_proven"] is False
+          challenge=json.loads((folder/"iam_freshness_challenge.json").read_text())
+          assert challenge["schema"]=="iam-2381-host-challenge/v1"
+          assert len(challenge["challenge"])==64
+          assert confirmed["terminal_state_immutable"] is True
+          assert confirmed["target_ack_signature_verified"] is True
+          assert confirmed["native_postgres_consumption_verified"] is True
+          assert confirmed["target_owned_sqlite_directly_read_for_reconciliation"] is False
+          assert confirmed["separate_mtls_reader_without_target_database"] is True
+          assert confirmed["target_post_retried"] is False
+          assert confirmed["permit_reissued"] is False
+          assert confirmed["independent_operator_validation"] is False
+          assert confirmed["production_claim"] is False
+          assert report["signed_target_mtls_observation_used_for_cas"] is True
+          assert report["signed_target_challenge_freshness_verified"] is True
+          assert report["historical_signed_reply_reuse_rejected_for_new_nonce"] is True
+          assert report["cross_host_replay_proven"] is False
+          assert report["reconciliation_cas_target_sqlite_direct_access"] is False
+          assert report["native_postgres_consumption_rows"]==1
+          assert report["native_postgres_idempotency_rows"]==1
+          assert report["target_grants"]==1
+          assert report["real_mtls_allowed_exactly_once"] is True
+          assert report["replay_rejected"] is True
+          assert report["mutation_retried"] is False
+          assert report["native_permit_reissued"] is False
+          assert report["production_claim"] is False
+          assert normal["status"]==200 and normal["result"]=="PASS"
+          assert normal["challenge_bound_receipt"] is True
+          assert normal["signed_ack"]["payload"]["challenge"]==challenge["challenge"]
+          assert normal["signed_ack"]["payload"]["schema"]=="isolated-iam-target-committed-ack/v2-challenge"
+          assert normal["signed_ack"]["payload"]["permit_id"]==challenge["permit_id"]
+          assert unscoped["observed_http_status"]==403 and unscoped["result"]=="PASS"
+          assert missing["observed_http_status"]==404 and missing["result"]=="PASS"
+          assert certless["observed_http_status"] is None and certless["result"]=="PASS"
+          print("IAM_2382_PG_NONCE_AND_SIGNED_MTLS_RECONCILIATION_ATOMIC_BOUNDED_PASS")
+          PY
+          cd "$LAB_REPORT_DIR"
+          find . -maxdepth 1 -name '*.json' -print0 | sort -z | xargs -0 sha256sum > manifest.sha256
+          sha256sum --check manifest.sha256
+      - name: Upload only sanitized bounded proof, never target SQLite or private signing keys
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: isolated-iam-durable-challenge-single-use-cas-v1
+          path: artifacts/isolated-enterprise-iam-challenge-bound-reconciliation/latest/
+          retention-days: 30
+          if-no-files-found: warn
