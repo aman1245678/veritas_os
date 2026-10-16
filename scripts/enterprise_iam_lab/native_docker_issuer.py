@@ -312,7 +312,7 @@ async def issue(issuer_dir: Path, trust_dir: Path, permit_dir: Path,
         origin.verify_native_bridge(bridge_receipt, public,
                                     source_payload, receipt)
         (evidence_dir / "iam_source_native_bridge_signed.json").write_text(
-            json.dumps(bridge_receipt, indent=2, sort_keys=True) + "\\n",
+            json.dumps(bridge_receipt, indent=2, sort_keys=True) + "\n",
             encoding="utf-8",
         )
         receipt.update({
