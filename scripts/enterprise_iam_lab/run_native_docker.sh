@@ -35,6 +35,16 @@ elif [[ "${LAB_NATIVE_LOST_ACK:-0}" != "0" ]]; then
   exit 2
 fi
 
+# #2378 is a separate, explicit, disposable process-crash experiment.
+if [[ "${LAB_NATIVE_PROCESS_RESTART:-0}" == "1" ]]; then
+  [[ "${LAB_NATIVE_DURABLE_PG:-0}" == "1" && "${LAB_NATIVE_LOST_ACK:-0}" == "1" ]] ||
+    { echo "RESTART_REQUIRES_DURABLE_LOST_ACK" >&2; exit 2; }
+  IAM_NATIVE_VERIFY_ARGS+=(--process-restart-recovery)
+elif [[ "${LAB_NATIVE_PROCESS_RESTART:-0}" != "0" ]]; then
+  echo "INVALID_PROCESS_RESTART_MODE" >&2
+  exit 2
+fi
+
 export LAB_UID="$(id -u)"
 export LAB_GID="$(id -g)"
 export LAB_PROJECT="veritas-iam-native-$(date +%s)-${BASHPID}"
@@ -171,6 +181,59 @@ LAB_CASE=wrong-signer "${COMPOSE[@]}" --profile probes run --rm --no-deps -T sco
   > "$REPORT_DIR/no_client_cert.json"
 "${COMPOSE[@]}" --profile probes run --rm --no-deps -T unscoped-probe \
   > "$REPORT_DIR/unscoped.json"
+
+if [[ "${LAB_NATIVE_PROCESS_RESTART:-0}" == "1" ]]; then
+  # Actual failure injection, NOT a normal exit: an independent Python
+  # reconciliation worker checks genuine PostgreSQL UNKNOWN, writes an
+  # fsynced checkpoint, then SIGKILLs itself before ANY target lookup.
+  if python3 -m scripts.enterprise_iam_lab.native_process_restart_probe \
+    --phase sigkill-before-lookup --report-dir "$REPORT_DIR" \
+    --trust-dir "$LAB_TRUST_DIR" --permit-dir "$LAB_PERMIT_DIR" \
+    --target-database "$LAB_STATE_DIR/iam.sqlite3" \
+    --checkpoint "$REPORT_DIR/iam_sigkill_checkpoint.json"; then
+    echo "EXPECTED_RECONCILIATION_WORKER_SIGKILL_NOT_OBSERVED" >&2
+    exit 2
+  else
+    IAM_WORKER_EXIT=$?
+  fi
+  [[ "$IAM_WORKER_EXIT" == "137" ]] ||
+    { echo "UNEXPECTED_WORKER_EXIT_NOT_SIGKILL" >&2; exit 2; }
+  python3 - "$REPORT_DIR/iam_sigkill_observation.json" "$IAM_WORKER_EXIT" <<'PY'
+import json
+from pathlib import Path
+import sys
+assert int(sys.argv[2]) == 137
+Path(sys.argv[1]).write_text(json.dumps({
+    "observed_exit_code": int(sys.argv[2]),
+    "expected_termination_signal": "SIGKILL",
+    "production_claim": False
+}, sort_keys=True) + "\n", encoding="utf-8")
+PY
+
+  # Abruptly stop the ACTUAL target Python process. Start the SAME container
+  # with the SAME bind-mounted SQLite, so no replacement execution is needed.
+  docker inspect "$TARGET_CID" > "$LAB_TMP/target_before_restart.json"
+  docker kill "$TARGET_CID" > /dev/null
+  [[ "$(docker inspect -f '{{.State.Running}}' "$TARGET_CID")" == "false" ]] ||
+    { echo "TARGET_PROCESS_NOT_STOPPED" >&2; exit 2; }
+  docker start "$TARGET_CID" > /dev/null
+  "${COMPOSE[@]}" up -d --wait --timeout 120 iam-target
+  [[ "$("${COMPOSE[@]}" ps -q iam-target)" == "$TARGET_CID" ]] ||
+    { echo "TARGET_CONTAINER_ID_CHANGED_ON_RESTART" >&2; exit 2; }
+  docker inspect "$TARGET_CID" > "$LAB_TMP/target_after_restart.json"
+
+  # Fresh process checks the durable UNKNOWN still exists and that original
+  # target-owned committed evidence survived SIGKILL and Docker restart.
+  # No POST, permit re-issuance or authoritative no-effect assumption.
+  python3 -m scripts.enterprise_iam_lab.native_process_restart_probe \
+    --phase verify-restart --report-dir "$REPORT_DIR" \
+    --trust-dir "$LAB_TRUST_DIR" --permit-dir "$LAB_PERMIT_DIR" \
+    --target-database "$LAB_STATE_DIR/iam.sqlite3" \
+    --checkpoint "$REPORT_DIR/iam_sigkill_checkpoint.json" \
+    --kill-observation "$REPORT_DIR/iam_sigkill_observation.json" \
+    --before-inspect "$LAB_TMP/target_before_restart.json" \
+    --after-inspect "$LAB_TMP/target_after_restart.json"
+fi
 
 if [[ "${LAB_NATIVE_LOST_ACK:-0}" == "1" ]]; then
   # Separate process after the response was deliberately discarded. Only a
