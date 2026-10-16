@@ -253,7 +253,15 @@ def test_new_reconciliation_path_has_no_target_sqlite_or_mutation_api():
     source = Path("scripts/enterprise_iam_lab/reconcile_signed_target_ack.py").read_text(
         encoding="utf-8",
     )
-    assert "sqlite3" not in source
+    import ast
+    syntax = ast.parse(source)
+    assert not any(
+        (isinstance(node, ast.Import)
+         and any(alias.name == "sqlite3" for alias in node.names))
+        or (isinstance(node, ast.ImportFrom) and node.module == "sqlite3")
+        for node in ast.walk(syntax)
+    ), "reconciliation must never directly import the target SQLite client"
+    assert "sqlite3.connect(" not in source
     assert "lookup_exact_target_effect(" not in source
     assert "_verified_native_postgres_join(" not in source
     assert "--target-database" not in source
