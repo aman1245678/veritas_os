@@ -93,7 +93,7 @@ def committed_from_target(db_path: Path, permit_id: str) -> dict:
 
 def sign_committed(payload: dict, private_pem: Path) -> dict:
     key = load_pem_private_key(private_pem.read_bytes(), password=None)
-    if type(key) is not Ed25519PrivateKey:
+    if not isinstance(key, Ed25519PrivateKey):
         raise ValueError("IAM2379_TARGET_SIGNER_TYPE_INVALID")
     return {
         "payload": payload,
