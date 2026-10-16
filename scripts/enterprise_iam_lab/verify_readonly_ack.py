@@ -23,8 +23,9 @@ from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 from cryptography.hazmat.primitives.serialization import load_pem_public_key
 
-from scripts.enterprise_iam_lab.reconcile_native_lost_ack import (
-    read_native_issuer, require,
+from scripts.enterprise_iam_lab.reconcile_native_lost_ack import require
+from scripts.enterprise_iam_lab.signed_permit import (
+    canonical as canonical_permit, verify_permit,
 )
 from scripts.enterprise_iam_lab.target_readonly_receipt import (
     SCHEMA, SOURCE_IDENTITY, canonical,
@@ -44,6 +45,40 @@ def read_json(path: Path) -> dict:
     data = json.loads(path.read_text(encoding="utf-8"))
     require(type(data) is dict, "IAM2379_EVIDENCE_MALFORMED")
     return data
+
+
+def read_known_response_issuer(folder: Path, trust: Path,
+                               permit_dir: Path) -> tuple[dict, dict]:
+    """Verify #2379's known-response native Permit; never bypass #2377's
+    required IN_FLIGHT scope or change that protected helper.
+    """
+    receipt = read_json(folder / "native_issuer_receipt.json")
+    require(
+        receipt.get("issuer_mode") == "REAL_NATIVE_POSTGRES_CONSUME_TEST_ONLY"
+        and receipt.get("native_store_durable") is True
+        and receipt.get("native_in_memory_test_override") is False
+        and receipt.get("durable_in_flight_created") is False
+        and receipt.get("native_authorization_consumed") is True
+        and receipt.get("production_claim") is False,
+        "IAM2379_UNTRUSTED_KNOWN_RESPONSE_ISSUER",
+    )
+    public = load_pem_public_key((trust / "permit-public.pem").read_bytes())
+    require(isinstance(public, Ed25519PublicKey),
+            "IAM2379_NATIVE_ISSUER_KEY_INVALID")
+    envelope = read_json(permit_dir / "valid.json")
+    issued_at = datetime.fromisoformat(receipt["permit_not_before"])
+    require(issued_at.tzinfo is not None, "IAM2379_NATIVE_ISSUE_TIME_INVALID")
+    permit = verify_permit(envelope, public, issued_at)
+    require(
+        permit["permit_id"] == receipt.get("permit_id")
+        and permit["authorization_id"] == receipt.get("authorization_id")
+        and permit["execution_intent_id"] == receipt.get("execution_intent_id")
+        and permit["request_id"] == receipt.get("request_id")
+        and hashlib.sha256(canonical_permit(permit)).hexdigest()
+        == receipt.get("permit_payload_sha256"),
+        "IAM2379_NATIVE_PERMIT_LINEAGE_MISMATCH",
+    )
+    return receipt, permit
 
 
 def verify_target_signature(envelope: dict, public_pem: bytes) -> dict:
@@ -154,10 +189,7 @@ def verify_probes(folder: Path) -> dict:
 async def verify(*, folder: Path, trust: Path, permit_dir: Path,
                  target_pub: Path, config: dict) -> dict:
     topology = verify_readonly_topology(config)
-    receipt, permit = read_native_issuer(folder, trust, permit_dir)
-    require(receipt["native_store_durable"] is True
-            and receipt["durable_in_flight_created"] is False,
-            "IAM2379_UNEXPECTED_NATIVE_STORE_MODE")
+    receipt, permit = read_known_response_issuer(folder, trust, permit_dir)
     target_public = target_pub.read_bytes()
     require(target_public != (trust / "permit-public.pem").read_bytes(),
             "IAM2379_TARGET_AND_ISSUER_SIGNER_MUST_DIFFER")
