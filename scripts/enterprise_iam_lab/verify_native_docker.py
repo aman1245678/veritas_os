@@ -156,6 +156,7 @@ def verify(
     source_sha: str = "", expected_sha: str = "",
     require_native_postgres: bool = False,
     lost_ack_recovery: bool = False,
+    process_restart_recovery: bool = False,
 ) -> dict:
     top = verify_topology(config)
     assert top["target_verifier_key_not_mounted_on_executor_or_agent"]
@@ -169,6 +170,7 @@ def verify(
 
     assert phase == "post-native"
     assert not lost_ack_recovery or require_native_postgres
+    assert not process_restart_recovery or (lost_ack_recovery and require_native_postgres)
     assert trust_dir is not None and permit_dir is not None
     assert re.fullmatch(r"[0-9a-f]{40}", source_sha)
     assert source_sha == expected_sha
@@ -307,11 +309,56 @@ def verify(
             "target_ledger_consulted_without_post": True,
         }
 
+    restart_evidence = {}
+    if process_restart_recovery:
+        checkpoint = _load(folder / "iam_sigkill_checkpoint.json")
+        killed = _load(folder / "iam_sigkill_observation.json")
+        observed = _load(folder / "iam_process_restart_observation.json")
+        assert checkpoint["schema"] == "iam-native-local-process-sigkill-checkpoint/v1"
+        assert checkpoint["operation_id"] == receipt["consumption_id"]
+        assert checkpoint["authorization_id"] == verified["authorization_id"]
+        assert checkpoint["effect_state"] == "EFFECT_UNKNOWN"
+        assert checkpoint["revision"] == 2
+        assert checkpoint["target_ledger_read_before_sigkill"] is False
+        assert killed["observed_exit_code"] == 137
+        assert killed["expected_termination_signal"] == "SIGKILL"
+        assert observed["result"] == "PASS"
+        assert observed["status"] == "SYNTHETIC_SAME_HOST_SIGKILL_AND_DOCKER_RESTART_NOT_PRODUCTION_PROVEN"
+        assert observed["process_killed_by_real_sigkill"] is True
+        assert observed["native_postgres_effect_state_survived_kill"] is True
+        assert observed["native_postgres_effect_state_still_unknown"] is True
+        assert observed["same_docker_container_restarted"] is True
+        assert observed["target_process_pid_changed"] is True
+        assert observed["target_healthy_after_restart"] is True
+        assert observed["same_target_owned_sqlite_mount"] is True
+        assert observed["target_owned_sqlite_effect_survived_target_restart"] is True
+        assert observed["target_grants"] == 1
+        assert observed["native_postgres_consumptions"] == 1
+        assert observed["no_second_mutation"] is True
+        assert observed["no_permit_reissuance"] is True
+        assert observed["new_effect_authority_granted"] is False
+        assert observed["remote_independent_verifier"] is False
+        assert observed["whole_host_crash_simulated"] is False
+        assert observed["production_claim"] is False
+        assert confirmation["operation_id"] == checkpoint["operation_id"]
+        restart_evidence = {
+            "real_worker_sigkill_observed": True,
+            "docker_target_process_restarted": True,
+            "target_sqlite_effect_survived_restart": True,
+            "native_postgres_unknown_survived_worker_kill": True,
+            "target_post_retried_after_restart": False,
+            "native_permit_reissued_after_restart": False,
+            "independent_operator_reconciliation": False,
+            "whole_host_crash_simulated": False,
+        }
     return {
         "result": "PASS",
         "phase": "post-native",
+        **restart_evidence,
         "proof_status": (
-            "SYNTHETIC_NATIVE_POSTGRES_LOST_ACK_TARGET_RECONCILIATION_NOT_PROVEN"
+            "SYNTHETIC_NATIVE_POSTGRES_PROCESS_SIGKILL_RESTART_RECONCILIATION_NOT_PROVEN"
+            if process_restart_recovery
+            else "SYNTHETIC_NATIVE_POSTGRES_LOST_ACK_TARGET_RECONCILIATION_NOT_PROVEN"
             if lost_ack_recovery
             else "SYNTHETIC_NATIVE_POSTGRES_CONSUME_TO_REAL_DOCKER_MTLS_NOT_PROVEN"
             if require_native_postgres
@@ -347,6 +394,7 @@ def main() -> None:
     parser.add_argument("--expected-sha", default="")
     parser.add_argument("--require-native-postgres", action="store_true")
     parser.add_argument("--lost-ack-recovery", action="store_true")
+    parser.add_argument("--process-restart-recovery", action="store_true")
     args = parser.parse_args()
     result = verify(
         phase=args.phase, folder=args.report_dir,
@@ -355,6 +403,7 @@ def main() -> None:
         source_sha=args.source_sha, expected_sha=args.expected_sha,
         require_native_postgres=args.require_native_postgres,
         lost_ack_recovery=args.lost_ack_recovery,
+        process_restart_recovery=args.process_restart_recovery,
     )
     output = args.report_dir / ("verification_" + args.phase.replace("-", "_") + ".json")
     output.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8")
