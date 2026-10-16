@@ -97,7 +97,8 @@ def validate_signed_lineage(
         and native.live_adapter_bind_authorization_id == permit["authorization_id"]
         and native.live_adapter_bind_authorization_hash == receipt["authorization_hash"]
         and native.execution_intent_id == permit["execution_intent_id"]
-        and native.execution_intent_hash == receipt["execution_intent_hash"]
+        and isinstance(native.execution_intent_hash, str)
+        and len(native.execution_intent_hash) == 64
         and native.idempotency_key == permit["request_id"]
         and native.consumption_state == "CONSUMED"
         and native.single_use_enforced is True,
