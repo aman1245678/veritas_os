@@ -5,6 +5,7 @@ services:
   iam-target:
     environment:
       LAB_TEST_READONLY_ACK: "1"
+      LAB_TEST_READONLY_FRESHNESS: "${LAB_TARGET_ACK_FRESHNESS:-0}"
       LAB_TARGET_ACK_SIGNER_PEM: /run/lab/ack-private/target-private.pem
     volumes:
       - ./scripts/enterprise_iam_lab/target_readonly_receipt.py:/app/target_readonly_receipt.py:ro
@@ -22,6 +23,7 @@ services:
     environment:
       PYTHONDONTWRITEBYTECODE: "1"
       LAB_READONLY_CASE: "${LAB_READONLY_CASE:-valid}"
+      LAB_ACK_FRESHNESS: "${LAB_TARGET_ACK_FRESHNESS:-0}"
     volumes:
       - ./scripts/enterprise_iam_lab/readonly_ack_probe.py:/app/readonly_ack_probe.py:ro
       - ./scripts/enterprise_iam_lab/target_readonly_receipt.py:/app/target_readonly_receipt.py:ro
@@ -41,6 +43,7 @@ services:
     environment:
       PYTHONDONTWRITEBYTECODE: "1"
       LAB_READONLY_CASE: wrong-scope
+      LAB_ACK_FRESHNESS: "${LAB_TARGET_ACK_FRESHNESS:-0}"
     volumes:
       - ./scripts/enterprise_iam_lab/readonly_ack_probe.py:/app/readonly_ack_probe.py:ro
       - ./scripts/enterprise_iam_lab/target_readonly_receipt.py:/app/target_readonly_receipt.py:ro
@@ -60,6 +63,7 @@ services:
     environment:
       PYTHONDONTWRITEBYTECODE: "1"
       LAB_READONLY_CASE: no-certificate
+      LAB_ACK_FRESHNESS: "${LAB_TARGET_ACK_FRESHNESS:-0}"
     volumes:
       - ./scripts/enterprise_iam_lab/readonly_ack_probe.py:/app/readonly_ack_probe.py:ro
       - ./scripts/enterprise_iam_lab/target_readonly_receipt.py:/app/target_readonly_receipt.py:ro

@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import hashlib
 import json
 from pathlib import Path
@@ -22,6 +22,7 @@ from scripts.enterprise_iam_lab.reconcile_native_lost_ack import (
     read_native_issuer, require, require_discarded_response,
 )
 from scripts.enterprise_iam_lab.target_readonly_receipt import (
+    CHALLENGE_PATTERN, MAX_OBSERVATION_VALIDITY, SCHEMA_CHALLENGE,
     SOURCE_IDENTITY, canonical as canonical_target_receipt,
 )
 from scripts.enterprise_iam_lab.verify_readonly_ack import (
@@ -50,6 +51,7 @@ from veritas_os.storage.db import close_pool
 
 
 SOURCE_TYPE = "synthetic-target-signed-mtls-readonly-ack-v1"
+SOURCE_TYPE_CHALLENGE = "synthetic-target-signed-mtls-challenge-ack-v2"
 VERIFIER_ID = "iam-2380-target-signed-docker-mtls-verifier-v1"
 PROOF_STATUS = "SYNTHETIC_NATIVE_POSTGRES_SIGNED_MTLS_ACK_CAS_NOT_PRODUCTION_PROVEN"
 
@@ -80,9 +82,34 @@ def validate_signed_lineage(
     permit: dict,
     native: AuthorizationConsumptionRecord,
     observed_at: str,
+    expected_challenge: str = "",
+    challenge_issued_at: str = "",
 ) -> dict:
     """Recheck target signature + exact native consumption before promoting."""
-    payload = verify_target_signature(envelope, target_public_pem)
+    payload = verify_target_signature(
+        envelope, target_public_pem,
+        expected_schema=SCHEMA_CHALLENGE if expected_challenge else "isolated-iam-target-committed-ack/v1",
+    )
+    if expected_challenge:
+        require(
+            type(expected_challenge) is str
+            and CHALLENGE_PATTERN.fullmatch(expected_challenge) is not None
+            and payload["challenge"] == expected_challenge
+            and bool(challenge_issued_at),
+            "IAM2381_WRONG_OR_MISSING_CHALLENGE",
+        )
+        challenge_clock = aware(challenge_issued_at)
+        target_clock = aware(payload["target_observed_at"])
+        target_expiry = aware(payload["target_expires_at"])
+        verifier_clock = aware(observed_at)
+        require(
+            challenge_clock - timedelta(seconds=2) <= target_clock <= verifier_clock + timedelta(seconds=2)
+            and target_clock < target_expiry
+            and target_expiry - target_clock <= MAX_OBSERVATION_VALIDITY
+            and verifier_clock <= target_expiry
+            and verifier_clock - challenge_clock <= MAX_OBSERVATION_VALIDITY,
+            "IAM2381_STALE_FUTURE_OR_UNSOLICITED_SIGNED_OBSERVATION",
+        )
     require(
         payload["permit_id"] == permit["permit_id"] == receipt["permit_id"]
         and payload["external_operation_reference"] == permit["permit_id"]
@@ -121,18 +148,23 @@ class SyntheticSignedMtlsAckVerifier:
         self, *,
         envelope: dict, pinned_target_public: bytes,
         receipt: dict, permit: dict, native: AuthorizationConsumptionRecord,
+        expected_challenge: str = "", challenge_issued_at: str = "",
     ) -> None:
         self.envelope = envelope
         self.pinned_target_public = pinned_target_public
         self.receipt = receipt
         self.permit = permit
         self.native = native
+        self.expected_challenge = expected_challenge
+        self.challenge_issued_at = challenge_issued_at
+        self.source_type = SOURCE_TYPE_CHALLENGE if expected_challenge else SOURCE_TYPE
         self.digest = signature_digest(envelope)
         self.target_public_fingerprint = hashlib.sha256(pinned_target_public).hexdigest()
         self.policy_hash = sha256_of_canonical_json({
             "verifier_id": VERIFIER_ID,
             "source_identity": SOURCE_IDENTITY,
-            "source_type": SOURCE_TYPE,
+            "source_type": self.source_type,
+            "expected_challenge": expected_challenge if expected_challenge else "disabled",
             "target_public_fingerprint": self.target_public_fingerprint,
             "proof_scope": "synthetic-mtls-retrieved-target-ed25519-receipt-and-native-postgres",
             "operator_independent": False,
@@ -145,7 +177,7 @@ class SyntheticSignedMtlsAckVerifier:
             and evidence.operation_id == self.native.consumption_id
             and evidence.authorization_id == self.permit["authorization_id"]
             and evidence.consumption_id == self.native.consumption_id
-            and evidence.source_type == SOURCE_TYPE
+            and evidence.source_type == self.source_type
             and evidence.source_identity == SOURCE_IDENTITY
             and evidence.external_operation_reference == self.permit["permit_id"]
             and evidence.external_ack_digest == self.digest
@@ -156,6 +188,8 @@ class SyntheticSignedMtlsAckVerifier:
             envelope=self.envelope, target_public_pem=self.pinned_target_public,
             receipt=self.receipt, permit=self.permit, native=self.native,
             observed_at=evidence.observed_at,
+            expected_challenge=self.expected_challenge,
+            challenge_issued_at=self.challenge_issued_at,
         )
         # The PostgreSQL record is loaded again from the actual native store
         # on every verification invocation, not trusted from the receipt alone.
@@ -185,7 +219,8 @@ class SyntheticSignedMtlsAckVerifier:
 
 
 async def perform(*, folder: Path, trust: Path, permits: Path,
-                  target_public: Path, compose_config: Path) -> dict:
+                  target_public: Path, compose_config: Path,
+                  freshness_challenge: bool = False) -> dict:
     # Neither this function nor the signer-backed verifier can open target
     # SQLite: NO --target-database path, sqlite3 connection, or target mount.
     require_discarded_response(folder)
@@ -197,6 +232,23 @@ async def perform(*, folder: Path, trust: Path, permits: Path,
     )
     topology = verify_readonly_topology(read_json(compose_config))
     envelope = verify_probes(folder)
+    challenge = ""
+    challenge_time = ""
+    if freshness_challenge:
+        registered = read_json(folder / "iam_freshness_challenge.json")
+        require(
+            registered.get("schema") == "iam-2381-host-challenge/v1"
+            and registered.get("permit_id") == permit["permit_id"]
+            and registered.get("target_status_before_lookup") == "EFFECT_UNKNOWN",
+            "IAM2381_EXPECTED_PRELOOKUP_STATE_MISSING",
+        )
+        challenge = registered.get("challenge")
+        challenge_time = registered.get("issued_at")
+        require(
+            isinstance(challenge, str)
+            and CHALLENGE_PATTERN.fullmatch(challenge) is not None,
+            "IAM2381_CHALLENGE_INVALID",
+        )
     pinned = target_public.read_bytes()
     require(pinned != (trust / "permit-public.pem").read_bytes(),
             "IAM2380_TARGET_SIGNER_MUST_DIFFER_FROM_ISSUER")
@@ -219,19 +271,21 @@ async def perform(*, folder: Path, trust: Path, permits: Path,
         verifier = SyntheticSignedMtlsAckVerifier(
             envelope=envelope, pinned_target_public=pinned,
             receipt=receipt, permit=permit, native=native,
+            expected_challenge=challenge, challenge_issued_at=challenge_time,
         )
         # Fail closed BEFORE CAS if the saved signed target receipt or native
         # lineage is missing/tampered. No effect retry under any outcome.
         validate_signed_lineage(
             envelope=envelope, target_public_pem=pinned,
             receipt=receipt, permit=permit, native=native, observed_at=now,
+            expected_challenge=challenge, challenge_issued_at=challenge_time,
         )
         evidence = ReconciliationEvidence(
             operation_id=native.consumption_id,
             authorization_id=permit["authorization_id"],
             consumption_id=native.consumption_id,
             claim=ReconciliationClaim.CONFIRMED_EFFECT,
-            source_type=SOURCE_TYPE, source_identity=SOURCE_IDENTITY,
+            source_type=verifier.source_type, source_identity=SOURCE_IDENTITY,
             observed_at=now,
             external_operation_reference=permit["permit_id"],
             external_ack_digest=verifier.digest,
@@ -271,8 +325,16 @@ async def perform(*, folder: Path, trust: Path, permits: Path,
             "effect_state_after": persisted.state.value,
             "revision": persisted.revision,
             "reconciliation_evidence_digest": persisted.reconciliation_evidence_hash,
-            "source_type": SOURCE_TYPE,
+            "source_type": verifier.source_type,
             "source_identity": SOURCE_IDENTITY,
+            "freshness_challenge_verified": freshness_challenge,
+            "freshness_challenge_digest": hashlib.sha256(
+                challenge.encode("ascii")
+            ).hexdigest() if freshness_challenge else None,
+            "target_ack_freshness_bounded_seconds": int(
+                MAX_OBSERVATION_VALIDITY.total_seconds()
+            ) if freshness_challenge else None,
+            "cross_host_replay_proven": False,
             "target_ack_signature_verified": True,
             "target_ack_sha256": verifier.digest,
             "native_postgres_consumption_verified": True,
@@ -298,11 +360,13 @@ def main() -> None:
     parser.add_argument("--permit-dir", required=True, type=Path)
     parser.add_argument("--target-public-key", required=True, type=Path)
     parser.add_argument("--compose-config", required=True, type=Path)
+    parser.add_argument("--freshness-challenge", action="store_true")
     args = parser.parse_args()
     result = asyncio.run(perform(
         folder=args.report_dir, trust=args.trust_dir,
         permits=args.permit_dir, target_public=args.target_public_key,
         compose_config=args.compose_config,
+        freshness_challenge=args.freshness_challenge,
     ))
     (args.report_dir / "iam_reconciliation_reconcile.json").write_text(
         json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8"

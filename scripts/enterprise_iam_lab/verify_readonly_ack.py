@@ -28,7 +28,7 @@ from scripts.enterprise_iam_lab.signed_permit import (
     canonical as canonical_permit, verify_permit,
 )
 from scripts.enterprise_iam_lab.target_readonly_receipt import (
-    SCHEMA, SOURCE_IDENTITY, canonical,
+    SCHEMA, SCHEMA_CHALLENGE, SOURCE_IDENTITY, canonical,
 )
 from scripts.enterprise_iam_lab.verify_transport import verify_topology
 from veritas_os.policy.live_adapter_bind_authorization_consumption_store import (
@@ -81,7 +81,9 @@ def read_known_response_issuer(folder: Path, trust: Path,
     return receipt, permit
 
 
-def verify_target_signature(envelope: dict, public_pem: bytes) -> dict:
+def verify_target_signature(
+    envelope: dict, public_pem: bytes, *, expected_schema: str = SCHEMA,
+) -> dict:
     require(type(envelope) is dict and set(envelope) == {"payload", "signature"},
             "IAM2379_ACK_ENVELOPE_INVALID")
     payload = envelope["payload"]
@@ -95,7 +97,8 @@ def verify_target_signature(envelope: dict, public_pem: bytes) -> dict:
     except (ValueError, TypeError, binascii.Error, InvalidSignature):
         raise ValueError("IAM2379_ACK_SIGNATURE_INVALID") from None
     require(
-        payload["schema"] == SCHEMA
+        payload["schema"] == expected_schema
+        and expected_schema in (SCHEMA, SCHEMA_CHALLENGE)
         and payload["source_identity"] == SOURCE_IDENTITY
         and payload["status"] == "committed"
         and payload["external_operation_reference"] == payload["permit_id"]

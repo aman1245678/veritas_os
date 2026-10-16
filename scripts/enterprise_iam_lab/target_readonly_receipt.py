@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import argparse
 import base64
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import json
 import os
 from pathlib import Path
@@ -30,6 +30,12 @@ FIELDS = frozenset({
 })
 SOURCE_IDENTITY = "isolated-iam-target:readonly-mtls"
 SCHEMA = "isolated-iam-target-committed-ack/v1"
+SCHEMA_CHALLENGE = "isolated-iam-target-committed-ack/v2-challenge"
+FIELDS_CHALLENGE = FIELDS | frozenset({
+    "challenge", "target_observed_at", "target_expires_at",
+})
+CHALLENGE_PATTERN = re.compile(r"[0-9a-f]{64}\Z")
+MAX_OBSERVATION_VALIDITY = timedelta(seconds=120)
 
 
 class UnknownEffect(ValueError):
@@ -37,8 +43,32 @@ class UnknownEffect(ValueError):
 
 
 def canonical(payload: dict) -> bytes:
-    if type(payload) is not dict or set(payload) != FIELDS:
+    if type(payload) is not dict:
         raise ValueError("IAM2379_ACK_FIELDS_INVALID")
+    version = payload.get("schema")
+    expected_fields = (
+        FIELDS if version == SCHEMA
+        else FIELDS_CHALLENGE if version == SCHEMA_CHALLENGE
+        else frozenset()
+    )
+    if set(payload) != expected_fields:
+        raise ValueError("IAM2379_ACK_FIELDS_INVALID")
+    if version == SCHEMA_CHALLENGE:
+        if (type(payload["challenge"]) is not str
+                or not CHALLENGE_PATTERN.fullmatch(payload["challenge"])
+                or not all(
+                    type(payload[key]) is str and payload[key]
+                    for key in ("target_observed_at", "target_expires_at")
+                )):
+            raise ValueError("IAM2381_CHALLENGE_OR_TIMESTAMPS_INVALID")
+        try:
+            observed = datetime.fromisoformat(payload["target_observed_at"])
+            expires = datetime.fromisoformat(payload["target_expires_at"])
+        except (ValueError, TypeError):
+            raise ValueError("IAM2381_CHALLENGE_CLOCK_INVALID") from None
+        if (observed.tzinfo is None or expires.tzinfo is None
+                or not timedelta(0) < expires - observed <= MAX_OBSERVATION_VALIDITY):
+            raise ValueError("IAM2381_CHALLENGE_LIFETIME_INVALID")
     if any(type(value) is not str or not value for key, value in payload.items()
            if key not in {"audit_id", "audit_status"}):
         raise ValueError("IAM2379_ACK_VALUE_INVALID")
@@ -89,6 +119,27 @@ def committed_from_target(db_path: Path, permit_id: str) -> dict:
     }
     canonical(payload)
     return payload
+
+
+def challenge_bound_committed(
+    db_path: Path, permit_id: str, challenge: str, *, observed_at: datetime | None = None,
+) -> dict:
+    """Observe target-owned state on a fresh scoped request, never grant authority."""
+    if type(challenge) is not str or not CHALLENGE_PATTERN.fullmatch(challenge):
+        raise ValueError("IAM2381_CHALLENGE_INVALID")
+    current = observed_at if observed_at is not None else datetime.now(timezone.utc)
+    if current.tzinfo is None or current.utcoffset() is None:
+        raise ValueError("IAM2381_CHALLENGE_CLOCK_INVALID")
+    current = current.astimezone(timezone.utc)
+    committed = committed_from_target(db_path, permit_id)
+    committed.update({
+        "schema": SCHEMA_CHALLENGE,
+        "challenge": challenge,
+        "target_observed_at": current.isoformat(),
+        "target_expires_at": (current + MAX_OBSERVATION_VALIDITY).isoformat(),
+    })
+    canonical(committed)
+    return committed
 
 
 def sign_committed(payload: dict, private_pem: Path) -> dict:

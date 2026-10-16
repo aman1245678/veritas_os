@@ -25,6 +25,7 @@ CRT = "/run/lab/certs/client.crt"
 KEY = "/run/lab/certs/client.key"
 PUB = "/run/lab/refs/target-ack-public.pem"
 REFERENCE_FILE = "/run/lab/refs/lookup.json"
+FRESHNESS_MODE = os.getenv("LAB_ACK_FRESHNESS", "0") == "1"
 
 
 def stop(reason: str, **kwargs) -> int:
@@ -44,11 +45,23 @@ def run() -> int:
         return stop("IAM2379_LOOKUP_REFERENCE_INVALID")
     if CASE == "missing":
         ref = "iam-permit:v1:sha256:" + "0" * 64
+    challenge = ""
+    if FRESHNESS_MODE:
+        from target_readonly_receipt import CHALLENGE_PATTERN
+        data = json.loads(Path("/run/lab/refs/challenge.json").read_text(encoding="utf-8"))
+        challenge = data["challenge"]
+        if (not isinstance(challenge, str)
+                or not CHALLENGE_PATTERN.fullmatch(challenge)
+                or data["permit_id"] != source["permit_id"]):
+            return stop("IAM2381_READER_CHALLENGE_INVALID")
     context = ssl.create_default_context(cafile=CA)
     if CASE != "no-certificate":
         context.load_cert_chain(CRT, KEY)
     opener = build_opener(ProxyHandler({}), HTTPSHandler(context=context))
-    request = Request(BASE + quote(ref, safe=""), method="GET")
+    uri = BASE + quote(ref, safe="")
+    if FRESHNESS_MODE:
+        uri += "?challenge=" + challenge
+    request = Request(uri, method="GET")
     status = None
     body = None
     try:
@@ -87,6 +100,11 @@ def run() -> int:
         if (body["payload"].get("permit_id") != ref
                 or body["payload"].get("status") != "committed"):
             return stop("IAM2379_SIGNED_RECEIPT_MISMATCH")
+        if FRESHNESS_MODE:
+            from target_readonly_receipt import SCHEMA_CHALLENGE
+            if (body["payload"].get("schema") != SCHEMA_CHALLENGE
+                    or body["payload"].get("challenge") != challenge):
+                return stop("IAM2381_SIGNED_CHALLENGE_MISMATCH")
         print(json.dumps({
             "case_id": CASE, "result": "PASS",
             "status": 200, "signed_ack": body,
@@ -94,6 +112,7 @@ def run() -> int:
             "reader_has_target_signer_private_key": False,
             "target_http_response_authenticated_via_mtls": True,
             "target_receipt_signature_verified": True,
+            "challenge_bound_receipt": FRESHNESS_MODE,
             "production_claim": False,
         }, sort_keys=True), flush=True)
         return 0
