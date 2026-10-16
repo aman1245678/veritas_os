@@ -228,6 +228,7 @@ async def issue(issuer_dir: Path, trust_dir: Path, permit_dir: Path,
             allow_in_memory_for_testing=not durable_postgres,
         )
         verified = verify_permit(envelope, signer.public_key(), actual)
+        legacy_signed_v1_envelope = envelope
         if source_bound_target_permit:
             # Consume native authority FIRST; never allow an input signature
             # to replace Human Approval. The executable v2 Permit now signs
@@ -296,19 +297,11 @@ async def issue(issuer_dir: Path, trust_dir: Path, permit_dir: Path,
     if datetime.fromisoformat(verified["expires_at"]) - datetime.now(timezone.utc) < timedelta(seconds=3):
         raise ValueError("NATIVE_PERMIT_EXPIRED_BEFORE_TRANSFER")
     if source_bound_target_permit:
-        # Retain the genuine post-consumption V1 as a downgrade negative
-        # fixture. This never becomes the executable valid.json.
+        # A VALID signed legacy permit must be rejected by the opt-in v2
+        # target before the first effect (not merely rejected as bad sig).
         _write_exclusive(
             permit_dir / "legacy-v1.json",
-            (json.dumps({
-                "payload": {key: value for key, value in verified.items()
-                            if key not in (
-                                "source_envelope", "original_request_digest",
-                                "candidate_digest", "source_attestation_digest",
-                                "source_nonce_sha256",
-                            )} | {"version": EXPECTED["version"]},
-                "signature": "not-an-authority",
-            }, sort_keys=True) + "\n").encode("utf-8"),
+            (json.dumps(legacy_signed_v1_envelope, sort_keys=True) + "\n").encode("utf-8"),
         )
     invalid = sign_permit(verified, Ed25519PrivateKey.generate())
     tampered = {
@@ -377,7 +370,8 @@ async def issue(issuer_dir: Path, trust_dir: Path, permit_dir: Path,
             "source_candidate_digest": source_payload["candidate_digest"],
             "source_attestation_digest": origin.sha(source_payload),
             "source_bridge_signed_evidence_only": True,
-            "target_enforces_source_digest": source_bound_target_permit,
+            "target_enforces_source_digest": False,
+            "target_source_bound_v2_requested": source_bound_target_permit,
             "actual_rcc_416_candidate_executed": False,
         })
     if source_bound_target_permit:
