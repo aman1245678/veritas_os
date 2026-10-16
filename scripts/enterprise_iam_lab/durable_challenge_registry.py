@@ -15,8 +15,6 @@ import json
 from pathlib import Path
 import re
 
-from psycopg.types.json import Jsonb
-
 from veritas_os.policy.bind_effect_reconciliation import (
     EffectExecutionState, EffectStateRecord, PostgresAtomicEffectStateStore,
     _record_hash_valid,
@@ -107,6 +105,7 @@ class ChallengeBoundPostgresEffectStore(PostgresAtomicEffectStateStore):
                 or record.authorization_id != self.authorization_id
                 or not _record_hash_valid(record)):
             return False
+        from psycopg.types.json import Jsonb
         pool = await get_pool()
         async with pool.connection() as conn:
             # One transaction: a crash cannot commit only the nonce or effect.
@@ -199,6 +198,40 @@ async def cli(args: argparse.Namespace) -> dict:
                     and bool(record["evidence_hash"]),
                     "IAM2382_DURABLE_CHALLENGE_NOT_CONSUMED")
             state = record["state"]
+            # The same operation cannot register its old challenge after
+            # restart, nor can any of eight parallel replay CAS attempts
+            # spend an already CONSUMED challenge.
+            try:
+                await register(
+                    challenge=nonce["challenge"], issued_at=nonce["issued_at"],
+                    permit_id=nonce["permit_id"], operation_id=operation_id,
+                    authorization_id=issuer["authorization_id"],
+                    consumption_id=operation_id,
+                )
+            except ChallengeRegistryError as exc:
+                require(str(exc) == "IAM2382_DUPLICATE_STALE_OR_UNBOUND_CHALLENGE",
+                        "IAM2382_REPLAY_REGISTER_WRONG_REFUSAL")
+            else:
+                raise ChallengeRegistryError("IAM2382_REPLAY_REGISTERED")
+            store = ChallengeBoundPostgresEffectStore(
+                nonce_sha256=hash_value, permit_id=issuer["permit_id"],
+                authorization_id=issuer["authorization_id"],
+                operation_id=operation_id,
+            )
+            persisted = await store.get(operation_id)
+            require(persisted is not None
+                    and persisted.state == EffectExecutionState.CONFIRMED_EFFECT
+                    and persisted.reconciliation_evidence_hash == record["evidence_hash"],
+                    "IAM2382_REPLAY_EFFECT_CHANGED")
+            async def replay():
+                return await store.transition(
+                    operation_id=operation_id,
+                    expected_state=EffectExecutionState.EFFECT_UNKNOWN,
+                    record=persisted,
+                )
+            refused = await asyncio.gather(*(replay() for _ in range(8)))
+            require(refused == [False] * 8,
+                    "IAM2382_ALREADY_SPENT_CHALLENGE_REUSED")
         return {"result": "PASS", "schema": "iam-2382-durable-challenge/v1",
                 "challenge_sha256": hash_value, "state": state,
                 "production_claim": False, "single_host": True}
