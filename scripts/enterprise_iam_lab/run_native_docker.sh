@@ -45,6 +45,7 @@ elif [[ "${LAB_NATIVE_PROCESS_RESTART:-0}" != "0" ]]; then
   exit 2
 fi
 
+IAM_FRESHNESS_ARGS=()
 # #2381: opt-in request-bound signed target evidence, NEVER a generic
 # authenticated receipt freshness or production replay-prevention claim.
 if [[ "${LAB_TARGET_ACK_FRESHNESS:-0}" == "1" ]]; then
@@ -55,6 +56,7 @@ if [[ "${LAB_TARGET_ACK_FRESHNESS:-0}" == "1" ]]; then
      "${LAB_NATIVE_PROCESS_RESTART:-0}" == "0" ]] ||
     { echo "CHALLENGE_BOUND_ACK_REQUIRES_REAL_PG_LOST_ACK_SIGNED_MTLS_CAS" >&2; exit 2; }
   IAM_NATIVE_VERIFY_ARGS+=(--ack-freshness)
+  IAM_FRESHNESS_ARGS=(--freshness-challenge)
 elif [[ "${LAB_TARGET_ACK_FRESHNESS:-0}" != "0" ]]; then
   echo "INVALID_ACK_FRESHNESS_MODE" >&2
   exit 2
@@ -373,7 +375,7 @@ if [[ "${LAB_NATIVE_SIGNED_ACK_RECONCILE:-0}" == "1" ]]; then
     --permit-dir "$LAB_PERMIT_DIR" \
     --target-public-key "$LAB_READONLY_REF_DIR/target-ack-public.pem" \
     --compose-config "$LAB_TMP/config.json" \
-    $([[ "${LAB_TARGET_ACK_FRESHNESS:-0}" == "1" ]] && echo --freshness-challenge)
+    "${IAM_FRESHNESS_ARGS[@]}"
 elif [[ "${LAB_NATIVE_LOST_ACK:-0}" == "1" ]]; then
   # Legacy #2377/#2378 separate-process same-host SQLite reconciliation.
   python3 -m scripts.enterprise_iam_lab.reconcile_native_lost_ack \
