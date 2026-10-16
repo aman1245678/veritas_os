@@ -157,6 +157,7 @@ def verify(
     require_native_postgres: bool = False,
     lost_ack_recovery: bool = False,
     process_restart_recovery: bool = False,
+    signed_ack_reconciliation: bool = False,
 ) -> dict:
     top = verify_topology(config)
     assert top["target_verifier_key_not_mounted_on_executor_or_agent"]
@@ -171,6 +172,9 @@ def verify(
     assert phase == "post-native"
     assert not lost_ack_recovery or require_native_postgres
     assert not process_restart_recovery or (lost_ack_recovery and require_native_postgres)
+    assert not signed_ack_reconciliation or (
+        lost_ack_recovery and require_native_postgres and not process_restart_recovery
+    )
     assert trust_dir is not None and permit_dir is not None
     assert re.fullmatch(r"[0-9a-f]{40}", source_sha)
     assert source_sha == expected_sha
@@ -351,12 +355,45 @@ def verify(
             "independent_operator_reconciliation": False,
             "whole_host_crash_simulated": False,
         }
+    signed_ack_evidence = {}
+    if signed_ack_reconciliation:
+        signed = _load(folder / "iam_reconciliation_reconcile.json")
+        assert signed["result"] == "PASS"
+        assert signed["proof_status"] == "SYNTHETIC_NATIVE_POSTGRES_SIGNED_MTLS_ACK_CAS_NOT_PRODUCTION_PROVEN"
+        assert signed["source_type"] == "synthetic-target-signed-mtls-readonly-ack-v1"
+        assert signed["source_identity"] == "isolated-iam-target:readonly-mtls"
+        assert signed["target_ack_signature_verified"] is True
+        assert signed["native_postgres_consumption_verified"] is True
+        assert signed["target_owned_sqlite_directly_read_for_reconciliation"] is False
+        assert signed["separate_mtls_reader_without_target_database"] is True
+        assert signed["target_reader_no_private_signer_mount"] is True
+        assert signed["terminal_state_immutable"] is True
+        assert signed["target_post_retried"] is False
+        assert signed["permit_reissued"] is False
+        assert signed["independent_operator_validation"] is False
+        assert signed["real_cloud_iam_effects"] == 0
+        assert signed["paid_provider_calls"] == 0
+        assert signed["operation_id"] == receipt["consumption_id"]
+        assert signed["effect_state_before"] == "EFFECT_UNKNOWN"
+        assert signed["effect_state_after"] == "CONFIRMED_EFFECT"
+        assert signed["revision"] == 3
+        assert signed["production_claim"] is False
+        signed_ack_evidence = {
+            "signed_target_mtls_observation_used_for_cas": True,
+            "reconciliation_cas_target_sqlite_direct_access": False,
+            "signed_target_reconciliation_sha256": signed["target_ack_sha256"],
+            "separate_reader_without_target_database": True,
+            "synthetic_host_operator_owned_signing_keys": True,
+        }
     return {
         "result": "PASS",
         "phase": "post-native",
         **restart_evidence,
+        **signed_ack_evidence,
         "proof_status": (
-            "SYNTHETIC_NATIVE_POSTGRES_PROCESS_SIGKILL_RESTART_RECONCILIATION_NOT_PROVEN"
+            "SYNTHETIC_NATIVE_POSTGRES_SIGNED_MTLS_ACK_CAS_NOT_PRODUCTION_PROVEN"
+            if signed_ack_reconciliation
+            else "SYNTHETIC_NATIVE_POSTGRES_PROCESS_SIGKILL_RESTART_RECONCILIATION_NOT_PROVEN"
             if process_restart_recovery
             else "SYNTHETIC_NATIVE_POSTGRES_LOST_ACK_TARGET_RECONCILIATION_NOT_PROVEN"
             if lost_ack_recovery
@@ -395,6 +432,7 @@ def main() -> None:
     parser.add_argument("--require-native-postgres", action="store_true")
     parser.add_argument("--lost-ack-recovery", action="store_true")
     parser.add_argument("--process-restart-recovery", action="store_true")
+    parser.add_argument("--signed-ack-reconciliation", action="store_true")
     args = parser.parse_args()
     result = verify(
         phase=args.phase, folder=args.report_dir,
@@ -404,6 +442,7 @@ def main() -> None:
         require_native_postgres=args.require_native_postgres,
         lost_ack_recovery=args.lost_ack_recovery,
         process_restart_recovery=args.process_restart_recovery,
+        signed_ack_reconciliation=args.signed_ack_reconciliation,
     )
     output = args.report_dir / ("verification_" + args.phase.replace("-", "_") + ".json")
     output.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8")
