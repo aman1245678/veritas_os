@@ -45,11 +45,31 @@ elif [[ "${LAB_NATIVE_PROCESS_RESTART:-0}" != "0" ]]; then
   exit 2
 fi
 
-# #2379 uses a separate, explicit read-only mTLS reader profile.
-if [[ "${LAB_TARGET_READONLY_ACK:-0}" == "1" ]]; then
-  [[ "${LAB_NATIVE_DURABLE_PG:-0}" == "1" && "${LAB_NATIVE_LOST_ACK:-0}" == "0" &&
+# #2379's known-response read-only mode stays unchanged by default.
+# #2380 alone may combine it with #2377's genuine lost-ACK/UNKNOWN flow.
+if [[ "${LAB_NATIVE_SIGNED_ACK_RECONCILE:-0}" == "1" ]]; then
+  [[ "${LAB_TARGET_READONLY_ACK:-0}" == "1" &&
+     "${LAB_NATIVE_DURABLE_PG:-0}" == "1" &&
+     "${LAB_NATIVE_LOST_ACK:-0}" == "1" &&
      "${LAB_NATIVE_PROCESS_RESTART:-0}" == "0" ]] ||
-    { echo "READONLY_ACK_REQUIRES_ISOLATED_DURABLE_KNOWN_RESPONSE" >&2; exit 2; }
+    { echo "SIGNED_ACK_RECONCILIATION_REQUIRES_DURABLE_LOST_ACK_AND_READONLY_MTLS" >&2; exit 2; }
+  IAM_NATIVE_VERIFY_ARGS+=(--signed-ack-reconciliation)
+elif [[ "${LAB_NATIVE_SIGNED_ACK_RECONCILE:-0}" != "0" ]]; then
+  echo "INVALID_SIGNED_ACK_RECONCILIATION_MODE" >&2
+  exit 2
+fi
+
+if [[ "${LAB_TARGET_READONLY_ACK:-0}" == "1" ]]; then
+  [[ "${LAB_NATIVE_DURABLE_PG:-0}" == "1" &&
+     "${LAB_NATIVE_PROCESS_RESTART:-0}" == "0" ]] ||
+    { echo "READONLY_ACK_REQUIRES_DURABLE_AND_NO_PROCESS_RESTART" >&2; exit 2; }
+  if [[ "${LAB_NATIVE_LOST_ACK:-0}" == "1" ]]; then
+    [[ "${LAB_NATIVE_SIGNED_ACK_RECONCILE:-0}" == "1" ]] ||
+      { echo "READONLY_LOST_ACK_REQUIRES_SIGNED_ACK_RECONCILIATION" >&2; exit 2; }
+  else
+    [[ "${LAB_NATIVE_SIGNED_ACK_RECONCILE:-0}" == "0" ]] ||
+      { echo "READONLY_KNOWN_RESPONSE_NOT_RECONCILIATION" >&2; exit 2; }
+  fi
 elif [[ "${LAB_TARGET_READONLY_ACK:-0}" != "0" ]]; then
   echo "INVALID_READONLY_ACK_MODE" >&2
   exit 2
@@ -237,11 +257,14 @@ PY
     > "$REPORT_DIR/readonly_wrong_scope.json"
   "${COMPOSE[@]}" --profile probes run --rm --no-deps -T reconciliation-no-cert \
     > "$REPORT_DIR/readonly_no_certificate.json"
-  python3 -m scripts.enterprise_iam_lab.verify_readonly_ack \
-    --report-dir "$REPORT_DIR" --trust-dir "$LAB_TRUST_DIR" \
-    --permit-dir "$LAB_PERMIT_DIR" \
-    --target-public-key "$LAB_READONLY_REF_DIR/target-ack-public.pem" \
-    --compose-config "$LAB_TMP/config.json"
+  if [[ "${LAB_NATIVE_SIGNED_ACK_RECONCILE:-0}" == "0" ]]; then
+    # #2379: known-response receipt-only proof stays strict and unchanged.
+    python3 -m scripts.enterprise_iam_lab.verify_readonly_ack \
+      --report-dir "$REPORT_DIR" --trust-dir "$LAB_TRUST_DIR" \
+      --permit-dir "$LAB_PERMIT_DIR" \
+      --target-public-key "$LAB_READONLY_REF_DIR/target-ack-public.pem" \
+      --compose-config "$LAB_TMP/config.json"
+  fi
 fi
 
 if [[ "${LAB_NATIVE_PROCESS_RESTART:-0}" == "1" ]]; then
@@ -297,9 +320,17 @@ PY
     --after-inspect "$LAB_TMP/target_after_restart.json"
 fi
 
-if [[ "${LAB_NATIVE_LOST_ACK:-0}" == "1" ]]; then
-  # Separate process after the response was deliberately discarded. Only a
-  # fresh, read-only lookup of the target's own ledger may close UNKNOWN.
+if [[ "${LAB_NATIVE_SIGNED_ACK_RECONCILE:-0}" == "1" ]]; then
+  # #2380: one fresh reconciliation process uses ONLY the target-signed
+  # result obtained via separate mTLS reader; no SQLite path is supplied.
+  # Existing native PostgreSQL CAS is the sole durable state transition.
+  python3 -m scripts.enterprise_iam_lab.reconcile_signed_target_ack \
+    --report-dir "$REPORT_DIR" --trust-dir "$LAB_TRUST_DIR" \
+    --permit-dir "$LAB_PERMIT_DIR" \
+    --target-public-key "$LAB_READONLY_REF_DIR/target-ack-public.pem" \
+    --compose-config "$LAB_TMP/config.json"
+elif [[ "${LAB_NATIVE_LOST_ACK:-0}" == "1" ]]; then
+  # Legacy #2377/#2378 separate-process same-host SQLite reconciliation.
   python3 -m scripts.enterprise_iam_lab.reconcile_native_lost_ack \
     --phase reconcile --report-dir "$REPORT_DIR" \
     --trust-dir "$LAB_TRUST_DIR" --permit-dir "$LAB_PERMIT_DIR" \
