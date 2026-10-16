@@ -45,6 +45,16 @@ elif [[ "${LAB_NATIVE_PROCESS_RESTART:-0}" != "0" ]]; then
   exit 2
 fi
 
+# #2379 uses a separate, explicit read-only mTLS reader profile.
+if [[ "${LAB_TARGET_READONLY_ACK:-0}" == "1" ]]; then
+  [[ "${LAB_NATIVE_DURABLE_PG:-0}" == "1" && "${LAB_NATIVE_LOST_ACK:-0}" == "0" &&
+     "${LAB_NATIVE_PROCESS_RESTART:-0}" == "0" ]] ||
+    { echo "READONLY_ACK_REQUIRES_ISOLATED_DURABLE_KNOWN_RESPONSE" >&2; exit 2; }
+elif [[ "${LAB_TARGET_READONLY_ACK:-0}" != "0" ]]; then
+  echo "INVALID_READONLY_ACK_MODE" >&2
+  exit 2
+fi
+
 export LAB_UID="$(id -u)"
 export LAB_GID="$(id -g)"
 export LAB_PROJECT="veritas-iam-native-$(date +%s)-${BASHPID}"
@@ -63,7 +73,20 @@ mkdir -p "$LAB_CERT_DIR"/{server,scoped,unscoped,public} \
   "$LAB_STATE_DIR" "$LAB_TRUST_DIR" "$LAB_PERMIT_DIR" "$LAB_ISSUER_DIR" "$REPORT_DIR"
 chmod 0700 "$LAB_TMP" "$LAB_CERT_DIR" "$LAB_STATE_DIR" "$LAB_TRUST_DIR" "$LAB_PERMIT_DIR" "$LAB_ISSUER_DIR" "$LAB_CERT_DIR"/{server,scoped,unscoped,public}
 
-COMPOSE=(docker compose -f compose.enterprise-iam-permit-transport.yml -p "$LAB_PROJECT")
+if [[ "${LAB_TARGET_READONLY_ACK:-0}" == "1" ]]; then
+  export LAB_READONLY_SIGNER_DIR="$LAB_TMP/ack-private"
+  export LAB_READONLY_REF_DIR="$LAB_TMP/readonly-refs"
+  mkdir -p "$LAB_READONLY_SIGNER_DIR" "$LAB_READONLY_REF_DIR" "$LAB_CERT_DIR/reader"
+  chmod 0700 "$LAB_READONLY_SIGNER_DIR" "$LAB_READONLY_REF_DIR" "$LAB_CERT_DIR/reader"
+  python3 scripts/enterprise_iam_lab/target_readonly_receipt.py --generate \
+    --private "$LAB_READONLY_SIGNER_DIR/target-private.pem" \
+    --public "$LAB_READONLY_REF_DIR/target-ack-public.pem" \
+    > "$REPORT_DIR/target_readonly_signer_setup.json"
+  COMPOSE=(docker compose -f compose.enterprise-iam-permit-transport.yml \
+    -f compose.enterprise-iam-readonly-ack-2379.override.yml -p "$LAB_PROJECT")
+else
+  COMPOSE=(docker compose -f compose.enterprise-iam-permit-transport.yml -p "$LAB_PROJECT")
+fi
 cleanup() {
   "${COMPOSE[@]}" --profile probes down -v --remove-orphans >/dev/null 2>&1 || true
   rm -rf "$LAB_TMP"
@@ -100,6 +123,17 @@ for actor in scoped-executor unscoped-probe; do
     -out "$LAB_CERT_DIR/$leaf/client.crt" \
     -extfile "$LAB_TMP/$leaf.ext" >/dev/null 2>&1
 done
+if [[ "${LAB_TARGET_READONLY_ACK:-0}" == "1" ]]; then
+  # Reader identity is separate from scoped-executor mutation identity.
+  openssl req -newkey rsa:2048 -nodes -keyout "$LAB_CERT_DIR/reader/client.key" \
+    -out "$LAB_TMP/reader.csr" -subj "/CN=reconciliation-reader" >/dev/null 2>&1
+  printf 'extendedKeyUsage=clientAuth\n' > "$LAB_TMP/reader.ext"
+  openssl x509 -req -days 1 -in "$LAB_TMP/reader.csr" \
+    -CA "$LAB_TMP/ca.crt" -CAkey "$LAB_TMP/ca.key" -CAcreateserial \
+    -out "$LAB_CERT_DIR/reader/client.crt" -extfile "$LAB_TMP/reader.ext" >/dev/null 2>&1
+  chmod 0600 "$LAB_CERT_DIR/reader/client.key"
+  cp "$LAB_TMP/ca.crt" "$LAB_CERT_DIR/reader/ca.crt"
+fi
 for leaf in server scoped unscoped public; do
   cp "$LAB_TMP/ca.crt" "$LAB_CERT_DIR/$leaf/ca.crt"
 done
@@ -181,6 +215,34 @@ LAB_CASE=wrong-signer "${COMPOSE[@]}" --profile probes run --rm --no-deps -T sco
   > "$REPORT_DIR/no_client_cert.json"
 "${COMPOSE[@]}" --profile probes run --rm --no-deps -T unscoped-probe \
   > "$REPORT_DIR/unscoped.json"
+
+if [[ "${LAB_TARGET_READONLY_ACK:-0}" == "1" ]]; then
+  # Only the non-authorizing hashed operation reference is mounted on
+  # the reader. No signed execution Permit or SQLite file is shared.
+  python3 - "$REPORT_DIR/native_issuer_receipt.json" "$LAB_READONLY_REF_DIR/lookup.json" <<'PY'
+import json
+from pathlib import Path
+import sys
+receipt = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+Path(sys.argv[2]).write_text(
+    json.dumps({"permit_id": receipt["permit_id"]}, sort_keys=True) + "\n",
+    encoding="utf-8",
+)
+PY
+  LAB_READONLY_CASE=valid "${COMPOSE[@]}" --profile probes run --rm --no-deps -T reconciliation-reader \
+    > "$REPORT_DIR/readonly_valid.json"
+  LAB_READONLY_CASE=missing "${COMPOSE[@]}" --profile probes run --rm --no-deps -T reconciliation-reader \
+    > "$REPORT_DIR/readonly_missing.json"
+  "${COMPOSE[@]}" --profile probes run --rm --no-deps -T reconciliation-wrong-scope \
+    > "$REPORT_DIR/readonly_wrong_scope.json"
+  "${COMPOSE[@]}" --profile probes run --rm --no-deps -T reconciliation-no-cert \
+    > "$REPORT_DIR/readonly_no_certificate.json"
+  python3 -m scripts.enterprise_iam_lab.verify_readonly_ack \
+    --report-dir "$REPORT_DIR" --trust-dir "$LAB_TRUST_DIR" \
+    --permit-dir "$LAB_PERMIT_DIR" \
+    --target-public-key "$LAB_READONLY_REF_DIR/target-ack-public.pem" \
+    --compose-config "$LAB_TMP/config.json"
+fi
 
 if [[ "${LAB_NATIVE_PROCESS_RESTART:-0}" == "1" ]]; then
   # Actual failure injection, NOT a normal exit: an independent Python

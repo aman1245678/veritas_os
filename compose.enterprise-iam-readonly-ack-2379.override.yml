@@ -1,0 +1,68 @@
+# #2379 opt-in synthetic target-owned READ-ONLY mTLS acknowledgement.
+# Merge with compose.enterprise-iam-permit-transport.yml ONLY in #2379 CI.
+# No existing production deployment or baseline service is modified.
+services:
+  iam-target:
+    environment:
+      LAB_TEST_READONLY_ACK: "1"
+      LAB_TARGET_ACK_SIGNER_PEM: /run/lab/ack-private/target-private.pem
+    volumes:
+      - ./scripts/enterprise_iam_lab/target_readonly_receipt.py:/app/target_readonly_receipt.py:ro
+      - ${LAB_READONLY_SIGNER_DIR:?}:/run/lab/ack-private:ro
+
+  reconciliation-reader:
+    image: "${LAB_PROJECT:?}-transport:local"
+    profiles: [probes]
+    user: "${LAB_UID:?}:${LAB_GID:?}"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    working_dir: /app
+    command: ["python", "-u", "/app/readonly_ack_probe.py"]
+    environment:
+      PYTHONDONTWRITEBYTECODE: "1"
+      LAB_READONLY_CASE: "${LAB_READONLY_CASE:-valid}"
+    volumes:
+      - ./scripts/enterprise_iam_lab/readonly_ack_probe.py:/app/readonly_ack_probe.py:ro
+      - ./scripts/enterprise_iam_lab/target_readonly_receipt.py:/app/target_readonly_receipt.py:ro
+      - ${LAB_CERT_DIR:?}/reader:/run/lab/certs:ro
+      - ${LAB_READONLY_REF_DIR:?}:/run/lab/refs:ro
+    networks: [effect_net]
+
+  reconciliation-wrong-scope:
+    image: "${LAB_PROJECT:?}-transport:local"
+    profiles: [probes]
+    user: "${LAB_UID:?}:${LAB_GID:?}"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    working_dir: /app
+    command: ["python", "-u", "/app/readonly_ack_probe.py"]
+    environment:
+      PYTHONDONTWRITEBYTECODE: "1"
+      LAB_READONLY_CASE: wrong-scope
+    volumes:
+      - ./scripts/enterprise_iam_lab/readonly_ack_probe.py:/app/readonly_ack_probe.py:ro
+      - ./scripts/enterprise_iam_lab/target_readonly_receipt.py:/app/target_readonly_receipt.py:ro
+      - ${LAB_CERT_DIR:?}/scoped:/run/lab/certs:ro
+      - ${LAB_READONLY_REF_DIR:?}:/run/lab/refs:ro
+    networks: [effect_net]
+
+  reconciliation-no-cert:
+    image: "${LAB_PROJECT:?}-transport:local"
+    profiles: [probes]
+    user: "${LAB_UID:?}:${LAB_GID:?}"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    working_dir: /app
+    command: ["python", "-u", "/app/readonly_ack_probe.py"]
+    environment:
+      PYTHONDONTWRITEBYTECODE: "1"
+      LAB_READONLY_CASE: no-certificate
+    volumes:
+      - ./scripts/enterprise_iam_lab/readonly_ack_probe.py:/app/readonly_ack_probe.py:ro
+      - ./scripts/enterprise_iam_lab/target_readonly_receipt.py:/app/target_readonly_receipt.py:ro
+      - ${LAB_CERT_DIR:?}/public:/run/lab/certs:ro
+      - ${LAB_READONLY_REF_DIR:?}:/run/lab/refs:ro
+    networks: [effect_net]
