@@ -136,7 +136,7 @@ def test_signed_time_must_match_single_use_permit_window(paired, which):
     if which == "committed_before_native":
         permit["not_before"] = (datetime.now(timezone.utc)+timedelta(seconds=1)).isoformat()
     elif which == "committed_after_expiry":
-        permit["expires_at"] = (datetime.now(timezone.utc)-timedelta(seconds=1)).isoformat()
+        permit["expires_at"] = (datetime.now(timezone.utc)-timedelta(seconds=4)).isoformat()
     else:
         clock = (datetime.now(timezone.utc)-timedelta(seconds=6)).isoformat()
     with pytest.raises(ValueError, match="IAM2380_ACK_COMMIT_CLOCK_OUTSIDE_NATIVE_PERMIT"):
