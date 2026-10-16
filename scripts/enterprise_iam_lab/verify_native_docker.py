@@ -362,7 +362,10 @@ def verify(
         signed = _load(folder / "iam_reconciliation_reconcile.json")
         assert signed["result"] == "PASS"
         assert signed["proof_status"] == "SYNTHETIC_NATIVE_POSTGRES_SIGNED_MTLS_ACK_CAS_NOT_PRODUCTION_PROVEN"
-        assert signed["source_type"] == "synthetic-target-signed-mtls-readonly-ack-v1"
+        assert signed["source_type"] == (
+            "synthetic-target-signed-mtls-challenge-ack-v2"
+            if ack_freshness else "synthetic-target-signed-mtls-readonly-ack-v1"
+        )
         assert signed["source_identity"] == "isolated-iam-target:readonly-mtls"
         assert signed["target_ack_signature_verified"] is True
         assert signed["native_postgres_consumption_verified"] is True
