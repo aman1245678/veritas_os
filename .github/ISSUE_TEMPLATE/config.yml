@@ -1,0 +1,6 @@
+# Keep legacy issue creation available; do not silently remove existing flows.
+blank_issues_enabled: true
+contact_links:
+  - name: "Report a security vulnerability (PRIVATE)"
+    url: "https://github.com/veritasfuji-japan/veritas_os/blob/main/SECURITY.md"
+    about: "Never post vulnerabilities, exploit details, credentials, or private data in public issues. Follow the private reporting methods in SECURITY.md."
