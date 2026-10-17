@@ -185,7 +185,6 @@ def verify(
 
     verify_denials(folder)
     if require_target_source_bound:
-        from scripts.enterprise_iam_lab.verify_transport import _require_http
         _require_http(_load(folder / "legacy_v1_denied.json"),
                       "legacy-v1", 403, "permit_denied")
         target = config["services"]["iam-target"]
