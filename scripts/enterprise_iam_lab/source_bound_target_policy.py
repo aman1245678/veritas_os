@@ -18,7 +18,7 @@ import re
 
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
-from cryptography.hazmat.primitives.serialization import load_pem_public_key
+from cryptography.hazmat.primitives.serialization import (Encoding, PublicFormat, load_pem_public_key)
 
 ORIGIN_SCHEMA = "rcc-controlled-synthetic-iam-origin/v1"
 PERMIT_VERSION = "isolated-iam-permit-v2-source-bound"
@@ -79,6 +79,26 @@ def parse_time(value: object) -> datetime:
         raise TargetSourceDenied("IAM2384_TIME_INVALID") from None
     must(at.tzinfo is not None, "TIMEZONE_REQUIRED")
     return at.astimezone(timezone.utc)
+
+
+def verify_external_origin_pin(public_pem: bytes, expected_spki_sha256: str) -> str:
+    """Target-owned verification of out-of-band origin trust pin.
+
+    Does not claim separate-host key custody. Rejects a substitute public
+    key even when an attacker controls a source-signed IAM envelope.
+    """
+    must(type(expected_spki_sha256) is str
+         and HEX64.fullmatch(expected_spki_sha256) is not None,
+         "EXTERNAL_TRUST_PIN_REQUIRED")
+    try:
+        key = load_pem_public_key(public_pem)
+    except (ValueError, TypeError) as exc:
+        raise TargetSourceDenied("IAM2385_EXTERNAL_KEY_INVALID") from exc
+    must(isinstance(key, Ed25519PublicKey), "EXTERNAL_KEY_NOT_ED25519")
+    der = key.public_bytes(Encoding.DER, PublicFormat.SubjectPublicKeyInfo)
+    actual = hashlib.sha256(der).hexdigest()
+    must(actual == expected_spki_sha256, "EXTERNAL_TRUST_PIN_MISMATCH")
+    return actual
 
 
 def verify_target_source(permit: dict, pinned_origin_public_pem: bytes,
