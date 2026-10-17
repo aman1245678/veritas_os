@@ -203,7 +203,7 @@ def test_target_sqlite_rejects_same_source_nonce_under_new_authorization(tmp_pat
     with sqlite3.connect(db_path) as db:
         assert db.execute("SELECT count(*) FROM grants").fetchone()[0] == 1
         assert db.execute("SELECT count(*) FROM permit_consumptions").fetchone()[0] == 1
-        assert db.execute("SELECT source_nonce_sha256 FROM permit_consumptions").fetchone()[0][0] == digest
+        assert db.execute("SELECT source_nonce_sha256 FROM permit_consumptions").fetchone()[0] == digest
 
 
 def test_v1_backward_compatible_schema_unchanged():
