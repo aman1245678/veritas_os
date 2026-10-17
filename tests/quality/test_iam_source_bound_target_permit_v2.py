@@ -109,8 +109,11 @@ def test_issuer_signature_alone_cannot_override_signed_source(field, value):
             sign_permit(altered, issuer)
     else:
         signed = sign_permit(altered, issuer)
-        checked = verify_permit(signed, issuer.public_key(), now)
-        with pytest.raises(target.TargetSourceDenied):
+        # Some actions are rejected at the v2 Permit's own effect-binding
+        # verifier, while validly signed source-digest changes get denied by
+        # the independent target origin verifier. Both are fail-closed.
+        with pytest.raises((PermitRejected, target.TargetSourceDenied)):
+            checked = verify_permit(signed, issuer.public_key(), now)
             target.verify_target_source(checked, pub, now=now)
 
 
