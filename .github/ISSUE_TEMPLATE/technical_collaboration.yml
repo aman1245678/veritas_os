@@ -1,0 +1,60 @@
+name: "Technical collaboration / evaluation"
+description: "Propose a scoped integration, review, or bounded technical pilot (not a production authorization)."
+title: "[Collaboration] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Describe one **bounded technical evaluation**. Please do not post confidential business details, credentials, sensitive customer data, or security vulnerabilities.
+        Security concerns belong in [private reporting](https://github.com/veritasfuji-japan/veritas_os/blob/main/SECURITY.md).
+        An Issue is not approval to execute external actions or incur costs. Commercial scope, access, and terms require separate agreement.
+  - type: dropdown
+    id: engagement
+    attributes:
+      label: "Proposed engagement"
+      options:
+        - "Independent code / architecture review"
+        - "Safe synthetic integration test"
+        - "Execution-boundary bypass-resistance review (non-sensitive proposal only)"
+        - "External adapter / SDK interoperability"
+        - "Scoped enterprise pilot discussion"
+        - "Other"
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: "Problem and desired outcome"
+      description: "Describe the business or technical problem without private data."
+    validations:
+      required: true
+  - type: textarea
+    id: boundary
+    attributes:
+      label: "Proposed effect boundary and safety constraints"
+      description: "Specify the exact action/target class, environment, whether effects are synthetic, and any restrictions."
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: "Suggested success criteria and evidence"
+      description: "e.g. fail-closed checks, replay-safe outcomes, reviewer-visible receipts, and latency/utility measurement."
+    validations:
+      required: true
+  - type: textarea
+    id: references
+    attributes:
+      label: "Relevant public links / background (optional)"
+      description: "Public documentation only; no secrets, sensitive findings, or customer records."
+    validations:
+      required: false
+  - type: checkboxes
+    id: approval
+    attributes:
+      label: "Scope acknowledgment"
+      options:
+        - label: "This proposal does not authorize live providers, external effects, paid services, or use of private credentials."
+          required: true
+        - label: "I will use private channels for vulnerabilities and confidential integration details."
+          required: true
