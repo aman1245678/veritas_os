@@ -160,6 +160,7 @@ def verify(
     signed_ack_reconciliation: bool = False,
     ack_freshness: bool = False,
     require_target_source_bound: bool = False,
+    require_external_source_pin: bool = False,
 ) -> dict:
     top = verify_topology(config)
     assert top["target_verifier_key_not_mounted_on_executor_or_agent"]
@@ -179,6 +180,7 @@ def verify(
     )
     assert not ack_freshness or signed_ack_reconciliation
     assert not require_target_source_bound or (ack_freshness and require_native_postgres)
+    assert not require_external_source_pin or require_target_source_bound
     assert trust_dir is not None and permit_dir is not None
     assert re.fullmatch(r"[0-9a-f]{40}", source_sha)
     assert source_sha == expected_sha
@@ -276,6 +278,29 @@ def verify(
         ).fetchone()[0]
     consumed_at = datetime.fromisoformat(consumed_at_str)
     assert consumed_at.tzinfo is not None
+    if require_external_source_pin:
+        from scripts.enterprise_iam_lab.source_bound_target_policy import (
+            verify_external_origin_pin,
+        )
+        assert receipt["external_origin_pin_enforced_at_native_issuance"] is True
+        assert receipt["external_rcc_operator_independently_verified"] is False
+        pin = receipt["external_origin_spki_sha256"]
+        target_env = config["services"]["iam-target"]["environment"]
+        assert target_env["LAB_TARGET_REQUIRE_EXTERNAL_RCC_PIN"] == "1"
+        assert target_env["LAB_TARGET_EXPECTED_ORIGIN_SPKI_SHA256"] == pin
+        assert verify_external_origin_pin(
+            (trust_dir / "origin-public.pem").read_bytes(), pin,
+        ) == pin
+        preflight = _load(folder / "iam_external_source_import_preflight.json")
+        assert preflight["result"] == "PASS"
+        assert preflight["trust_spki_sha256"] == pin
+        assert preflight["source_signature_valid"] is True
+        assert preflight["source_payload_sha256"] == receipt["source_attestation_digest"]
+        assert preflight["original_request_digest"] == receipt["source_original_request_digest"]
+        assert preflight["candidate_digest"] == receipt["source_candidate_digest"]
+        assert preflight["input_signer_generated_by_veritas_this_run"] is False
+        assert preflight["independent_rcc_operator_proven"] is False
+        assert preflight["production_claim"] is False
     if require_target_source_bound:
         from scripts.enterprise_iam_lab.signed_permit import V2
         from scripts.enterprise_iam_lab.source_bound_target_policy import verify_target_source
@@ -461,6 +486,9 @@ def verify(
         "target_source_bound_v2_proof": require_target_source_bound,
         "source_nonce_target_single_use_ledger_checked": require_target_source_bound,
         "actual_independently_operated_rcc_source": False,
+        "out_of_band_source_key_pinned_at_target_and_native":
+            require_external_source_pin,
+        "real_remote_rcc_operator_proven": False,
         "real_mtls_allowed_exactly_once": True,
         "replay_rejected": True,
         "target_grants": len(state["grants"]),
@@ -489,6 +517,7 @@ def main() -> None:
     parser.add_argument("--signed-ack-reconciliation", action="store_true")
     parser.add_argument("--ack-freshness", action="store_true")
     parser.add_argument("--require-target-source-bound", action="store_true")
+    parser.add_argument("--require-external-source-pin", action="store_true")
     args = parser.parse_args()
     result = verify(
         phase=args.phase, folder=args.report_dir,
@@ -501,6 +530,7 @@ def main() -> None:
         signed_ack_reconciliation=args.signed_ack_reconciliation,
         ack_freshness=args.ack_freshness,
         require_target_source_bound=args.require_target_source_bound,
+        require_external_source_pin=args.require_external_source_pin,
     )
     output = args.report_dir / ("verification_" + args.phase.replace("-", "_") + ".json")
     output.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8")

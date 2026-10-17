@@ -35,6 +35,7 @@ from cryptography.hazmat.primitives.serialization import (
 
 from scripts.enterprise_iam_lab import native_permit_bridge as bridge
 from scripts.enterprise_iam_lab import source_bound_iam_origin as origin
+from scripts.enterprise_iam_lab import external_rcc_source_import as external_source
 from scripts.enterprise_iam_lab.signed_permit import (
     EXPECTED, canonical, sign_permit, verify_permit,
 )
@@ -148,7 +149,8 @@ async def issue(issuer_dir: Path, trust_dir: Path, permit_dir: Path,
                 persist_effect_in_flight: bool = False,
                 source_attestation: Path | None = None,
                 source_trust_key: Path | None = None,
-                source_bound_target_permit: bool = False) -> dict:
+                source_bound_target_permit: bool = False,
+                external_origin_pin: str | None = None) -> dict:
     """Use only trusted exact store classes; PostgreSQL is mandatory in durable mode."""
     if type(durable_postgres) is not bool:
         raise ValueError("IAM_NATIVE_STORE_MODE_INVALID")
@@ -177,6 +179,20 @@ async def issue(issuer_dir: Path, trust_dir: Path, permit_dir: Path,
             source_payload is None or not durable_postgres
             or not persist_effect_in_flight):
         raise ValueError("IAM2384_SOURCE_BOUND_REQUIRES_APPROVED_DURABLE_NATIVE_PATH")
+    if external_origin_pin is not None:
+        if (source_attestation is None or source_trust_key is None
+                or not source_bound_target_permit):
+            raise ValueError("IAM2385_EXTERNAL_PIN_REQUIRES_TARGET_V2_AND_SOURCE")
+        # Recheck the independently configured Ed25519 trust root at the
+        # point of issuance; the earlier shell preflight does not confer
+        # authority or bypass native Human Approval/Bind single-use.
+        check = external_source.admit(
+            source_attestation, source_trust_key, external_origin_pin,
+            now=datetime.now(timezone.utc),
+        )
+        if source_payload is None or origin.sha(source_payload) != check[
+                "source_payload_sha256"]:
+            raise ValueError("IAM2385_EXTERNAL_PAYLOAD_SUBSTITUTED")
     key_file = issuer_dir / KEY_NAME
     if not key_file.is_file() or not permit_dir.is_dir() or not evidence_dir.is_dir():
         raise ValueError("prepared trusted issuer and output dirs required")
@@ -380,6 +396,10 @@ async def issue(issuer_dir: Path, trust_dir: Path, permit_dir: Path,
         )
         receipt["source_nonce_target_replay_fence_required"] = True
         receipt["independently_operated_rcc_source"] = False
+    if external_origin_pin is not None:
+        receipt["external_origin_pin_enforced_at_native_issuance"] = True
+        receipt["external_origin_spki_sha256"] = external_origin_pin
+        receipt["external_rcc_operator_independently_verified"] = False
     (evidence_dir / RECEIPT).write_text(
         json.dumps(receipt, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
@@ -398,6 +418,7 @@ def main() -> None:
     parser.add_argument("--source-attestation", type=Path)
     parser.add_argument("--source-trust-key", type=Path)
     parser.add_argument("--source-bound-target-permit", action="store_true")
+    parser.add_argument("--external-origin-pin")
     args = parser.parse_args()
     if args.phase == "prepare":
         prepare(args.issuer_dir, args.trust_dir)
@@ -412,6 +433,7 @@ def main() -> None:
         source_attestation=args.source_attestation,
         source_trust_key=args.source_trust_key,
         source_bound_target_permit=args.source_bound_target_permit,
+        external_origin_pin=args.external_origin_pin,
     ))
     print(json.dumps({
         "result": receipt["result"], "issuer_mode": receipt["issuer_mode"],

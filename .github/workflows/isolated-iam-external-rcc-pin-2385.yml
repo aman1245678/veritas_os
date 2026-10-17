@@ -1,0 +1,84 @@
+name: "Isolated IAM 2385 External RCC Source Pin Admission (No Effect)"
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/isolated-iam-external-rcc-pin-2385.yml"
+      - "scripts/enterprise_iam_lab/external_rcc_source_import.py"
+      - "scripts/enterprise_iam_lab/source_bound_target_policy.py"
+      - "scripts/enterprise_iam_lab/target_service.py"
+      - "scripts/enterprise_iam_lab/native_docker_issuer.py"
+      - "scripts/enterprise_iam_lab/run_native_docker.sh"
+      - "scripts/enterprise_iam_lab/source_bound_iam_origin.py"
+      - "compose.enterprise-iam-source-bound-target-2384.override.yml"
+      - "tests/quality/test_iam_external_rcc_source_import_v1.py"
+      - "docs/ISOLATED_IAM_EXTERNAL_RCC_SOURCE_PIN_2385.md"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: iam-external-rcc-pin-2385-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  offline-source-pin-negatives:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      PYTHONDONTWRITEBYTECODE: "1"
+      PYTHONUNBUFFERED: "1"
+      REPORT_DIR: artifacts/isolated-iam-external-rcc-pin-2385/latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install existing local signature test dependencies (no Provider)
+        run: |
+          set -euo pipefail
+          python -m pip install -e ".[dev,signing]" "psycopg[binary]" psycopg-pool
+      - name: Verify external origin pin, drift/refusal and v2 compatibility (offline)
+        run: |
+          set -euo pipefail
+          mkdir -p "$REPORT_DIR"
+          python -m pytest -q \
+            tests/quality/test_iam_external_rcc_source_import_v1.py \
+            tests/quality/test_iam_source_bound_target_permit_v2.py \
+            tests/quality/test_iam_source_bound_admission_v1.py \
+            --junitxml="$REPORT_DIR/junit.xml"
+      - name: Publish only negative proof report, no source input or private signer key
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          folder=Path("artifacts/isolated-iam-external-rcc-pin-2385/latest")
+          assert (folder/"junit.xml").is_file()
+          result={
+            "result":"PASS",
+            "schema":"iam-2385-external-rcc-import-negatives/v1",
+            "source_pin_checked_with_independent_public_key":True,
+            "key_substitution_and_counter_scope_refused":True,
+            "native_issuer_pin_recheck_wired":True,
+            "synthetic_target_pin_verifier_wired":True,
+            "actual_partner_artifact_imported":False,
+            "actual_partner_operator_independence_proven":False,
+            "real_external_iam_effect_executed":False,
+            "paid_provider_calls":0,
+            "production_claim":False
+          }
+          (folder/"report.json").write_text(json.dumps(result,sort_keys=True,indent=2)+"\n")
+          PY
+          (cd "$REPORT_DIR" && sha256sum junit.xml report.json > manifest.sha256 && sha256sum --check manifest.sha256)
+      - name: Upload sanitized offline assertions
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: isolated-iam-external-rcc-pin-2385-no-effect
+          path: artifacts/isolated-iam-external-rcc-pin-2385/latest/
+          if-no-files-found: warn
+          retention-days: 30

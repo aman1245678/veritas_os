@@ -60,6 +60,20 @@ fi
 # #2383 opt-in: signed controlled-source IAM proposal, not #416 counter
 # authority. Requires native durable path and downstream target verification.
 IAM_SOURCE_BOUND_ARGS=()
+# An external-source mode cannot silently fall back to the locally minted
+# #2383/#2384 signer if a caller omits input/key/out-of-band key pin.
+if [[ "${LAB_RCC_EXTERNAL_SOURCE_MODE:-0}" == "1" ]]; then
+  [[ "${LAB_SOURCE_BOUND_IAM_ADMISSION:-0}" == "1" &&
+     "${LAB_TARGET_SOURCE_BOUND_PERMIT:-0}" == "1" &&
+     -n "${LAB_RCC_SIGNED_SOURCE_FILE:-}" &&
+     -n "${LAB_RCC_PUBLIC_KEY_FILE:-}" &&
+     -n "${LAB_RCC_TRUST_SPKI_SHA256:-}" ]] ||
+    { echo "IAM2385_EXTERNAL_SOURCE_INPUT_KEY_PIN_AND_TARGET_V2_REQUIRED" >&2; exit 2; }
+  IAM_NATIVE_VERIFY_ARGS+=(--require-external-source-pin)
+elif [[ "${LAB_RCC_EXTERNAL_SOURCE_MODE:-0}" != "0" ]]; then
+  echo "IAM2385_INVALID_EXTERNAL_SOURCE_MODE" >&2
+  exit 2
+fi
 # Target v2 is opt-in and requires ALL #2383 + durable mTLS/PG/nonce gates.
 if [[ "${LAB_TARGET_SOURCE_BOUND_PERMIT:-0}" == "1" ]]; then
   [[ "${LAB_SOURCE_BOUND_IAM_ADMISSION:-0}" == "1" &&
@@ -180,13 +194,29 @@ python3 scripts/enterprise_iam_lab/native_docker_issuer.py \
   --phase prepare --issuer-dir "$LAB_ISSUER_DIR" --trust-dir "$LAB_TRUST_DIR" \
   > "$REPORT_DIR/native_issuer_prepare.json"
 
+IAM_SOURCE_ATTESTATION_PATH="$REPORT_DIR/iam_synthetic_source_attestation.json"
 if [[ "${LAB_TARGET_SOURCE_BOUND_PERMIT:-0}" == "1" ]]; then
-  # Pin source origin trust material on the target before it starts.
-  python3 -m scripts.enterprise_iam_lab.source_bound_iam_origin \
-    prepare-synthetic-origin --origin-dir "$LAB_ORIGIN_DIR" \
-    --trust-dir "$LAB_TRUST_DIR" \
-    --attestation "$REPORT_DIR/iam_synthetic_source_attestation.json" \
-    > "$REPORT_DIR/iam_source_prepare.json"
+  if [[ "${LAB_RCC_EXTERNAL_SOURCE_MODE:-0}" == "1" ]]; then
+    # Strict import before target startup: no local source signing, and no
+    # real user-request bytes in the uploaded REPORT_DIR evidence.
+    python3 -m scripts.enterprise_iam_lab.external_rcc_source_import \
+      --attestation "$LAB_RCC_SIGNED_SOURCE_FILE" \
+      --trusted-public "$LAB_RCC_PUBLIC_KEY_FILE" \
+      --pinned-spki-sha256 "$LAB_RCC_TRUST_SPKI_SHA256" \
+      --output "$REPORT_DIR/iam_external_source_import_preflight.json" \
+      > "$REPORT_DIR/iam_external_source_preflight_stdout.json"
+    cp -- "$LAB_RCC_PUBLIC_KEY_FILE" "$LAB_TRUST_DIR/origin-public.pem"
+    IAM_SOURCE_ATTESTATION_PATH="$LAB_TMP/iam_external_source_input.json"
+    cp -- "$LAB_RCC_SIGNED_SOURCE_FILE" "$IAM_SOURCE_ATTESTATION_PATH"
+    chmod 0600 "$IAM_SOURCE_ATTESTATION_PATH"
+  else
+    # Existing #2384 controlled same-host source mode remains unchanged.
+    python3 -m scripts.enterprise_iam_lab.source_bound_iam_origin \
+      prepare-synthetic-origin --origin-dir "$LAB_ORIGIN_DIR" \
+      --trust-dir "$LAB_TRUST_DIR" \
+      --attestation "$IAM_SOURCE_ATTESTATION_PATH" \
+      > "$REPORT_DIR/iam_source_prepare.json"
+  fi
 fi
 
 # Disposable TLS CA and leaf credentials. CA PRIVATE KEY is never mounted.
@@ -275,17 +305,22 @@ python3 scripts/enterprise_iam_lab/verify_native_docker.py \
 if [[ "${LAB_SOURCE_BOUND_IAM_ADMISSION:-0}" == "1" ]]; then
   if [[ "${LAB_TARGET_SOURCE_BOUND_PERMIT:-0}" != "1" ]]; then
     python3 -m scripts.enterprise_iam_lab.source_bound_iam_origin \
-    prepare-synthetic-origin --origin-dir "$LAB_ORIGIN_DIR" \
-    --trust-dir "$LAB_TRUST_DIR" \
-    --attestation "$REPORT_DIR/iam_synthetic_source_attestation.json" \
-    > "$REPORT_DIR/iam_source_prepare.json"
+      prepare-synthetic-origin --origin-dir "$LAB_ORIGIN_DIR" \
+      --trust-dir "$LAB_TRUST_DIR" \
+      --attestation "$IAM_SOURCE_ATTESTATION_PATH" \
+      > "$REPORT_DIR/iam_source_prepare.json"
   fi
   IAM_SOURCE_BOUND_ARGS=(
-    --source-attestation "$REPORT_DIR/iam_synthetic_source_attestation.json"
+    --source-attestation "$IAM_SOURCE_ATTESTATION_PATH"
     --source-trust-key "$LAB_TRUST_DIR/origin-public.pem"
   )
   if [[ "${LAB_TARGET_SOURCE_BOUND_PERMIT:-0}" == "1" ]]; then
     IAM_SOURCE_BOUND_ARGS+=(--source-bound-target-permit)
+  fi
+  if [[ "${LAB_RCC_EXTERNAL_SOURCE_MODE:-0}" == "1" ]]; then
+    IAM_SOURCE_BOUND_ARGS+=(
+      --external-origin-pin "$LAB_RCC_TRUST_SPKI_SHA256"
+    )
   fi
 fi
 
@@ -476,7 +511,7 @@ fi
 if [[ "${LAB_SOURCE_BOUND_IAM_ADMISSION:-0}" == "1" ]]; then
   python3 -m scripts.enterprise_iam_lab.source_bound_iam_origin \
     verify-evidence --trust-dir "$LAB_TRUST_DIR" \
-    --attestation "$REPORT_DIR/iam_synthetic_source_attestation.json" \
+    --attestation "$IAM_SOURCE_ATTESTATION_PATH" \
     --issuer-receipt "$REPORT_DIR/native_issuer_receipt.json" \
     --native-bridge "$REPORT_DIR/iam_source_native_bridge_signed.json" \
     > "$REPORT_DIR/iam_source_admission_verified.json"
