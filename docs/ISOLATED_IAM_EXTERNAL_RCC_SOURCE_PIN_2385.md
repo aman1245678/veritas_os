@@ -73,11 +73,29 @@ unchanged by default.
 
 ## Evidence gates
 
-PR dedicated workflow runs **offline/negative preflight tests only**.
-It generates adversarial test signer fixtures locally, deliberately
-labels them **NOT independent RCC**, and performs **zero Docker IAM
-effects**. Existing #2384 CI remains the authority for the separate
-same-host source-bound target v2 execution.
+There are two separate PR proof types:
+
+1. **Offline input-refusal workflow**
+   `.github/workflows/isolated-iam-external-rcc-pin-2385.yml`:
+   local signer fixtures, negative preflight tests, **zero IAM effects**.
+2. **External-input-mode synthetic Docker E2E workflow**
+   `.github/workflows/isolated-iam-external-rcc-e2e-2385.yml`:
+   generate a controlled synthetic Ed25519 IAM-only input in a **separate
+   CI process** outside the VERITAS issuer, store raw signed input only
+   under private runner scratch, pin its exact SPKI SHA-256 out-of-band
+   to the synthetic input file, then enable `LAB_RCC_EXTERNAL_SOURCE_MODE=1`.
+   Confirm native admission/Human Approval, PostgreSQL single use,
+   issuer-signed Permit v2, independent target-side signer pin, one
+   Docker/mTLS synthetic IAM grant, target nonce replay rejection, signed
+   read-only ACK and durable `EFFECT_UNKNOWN→CONFIRMED_EFFECT` CAS.
+   A genuinely signed v1 downgrade must fail before any mutation.
+   The artifact contains **redacted evidence**, not source envelope, signer
+   secrets or target SQLite.
+
+These CI fixtures are operated on the SAME CI HOST. They prove the
+external-input code path in a controlled engineering environment, NOT
+RCC peer key custody, multi-host isolation, real source candidate, or
+customer-owned IAM. They cannot close the independent-source evidence gate.
 
 For a real independent-source claim, require an actual independently
 controlled signing key, agreed key fingerprint transferred out of band,
