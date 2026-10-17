@@ -1,0 +1,87 @@
+name: "Bug report (non-sensitive)"
+description: "Report a reproducible non-security defect with exact evidence and external-effect status."
+title: "[Bug] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for helping improve VERITAS OS. **Public issues are visible to everyone.**
+        Do not include vulnerabilities, exploit details, credentials, tokens, private/customer data, or sensitive logs.
+        For suspected security issues, **stop and report privately** via [SECURITY.md](https://github.com/veritasfuji-japan/veritas_os/blob/main/SECURITY.md).
+        Filing this issue does not authorize running providers, spending API credits, or causing real-world effects.
+  - type: input
+    id: affected_sha
+    attributes:
+      label: "Affected VERITAS OS commit SHA"
+      description: "Provide the exact 40-character commit SHA, or explain why it cannot be determined."
+      placeholder: "Full commit SHA or unknown (with reason)"
+    validations:
+      required: true
+  - type: input
+    id: component
+    attributes:
+      label: "Affected component / endpoint"
+      placeholder: "e.g. Bind Boundary, /v1/decide, SDK adapter"
+    validations:
+      required: true
+  - type: dropdown
+    id: environment
+    attributes:
+      label: "Execution environment"
+      options:
+        - "Offline / unit test"
+        - "Controlled synthetic fixture / local integration"
+        - "Isolated test environment (with explicit owner approval)"
+        - "Production (observation only; sanitized)"
+        - "Other / unknown"
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: "Steps to reproduce (sanitized)"
+      description: "Use safe, minimal steps; no credentials, malicious payloads, or unauthorized effects."
+      placeholder: "1. Check out SHA ...\n2. Run a permitted, non-effecting test ...\n3. Observe ..."
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: "Expected result"
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: "Actual result"
+    validations:
+      required: true
+  - type: dropdown
+    id: external_effect
+    attributes:
+      label: "External effect status"
+      description: "A missing response is not proof of NO_EFFECT. If uncertain, choose UNKNOWN and do not retry."
+      options:
+        - "NO_EFFECT — no external state mutation"
+        - "Controlled synthetic fixture effect only"
+        - "Blocked before dispatch"
+        - "Real external effect observed (previously authorized)"
+        - "EFFECT_UNKNOWN — outcome uncertain; no blind retry"
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: "Reproducible evidence (sanitized)"
+      description: "Optional CI run/job/artifact IDs, artifact digests, test names, or redacted logs. Do not paste secrets."
+    validations:
+      required: false
+  - type: checkboxes
+    id: publication_safety
+    attributes:
+      label: "Publication and authorization checks"
+      options:
+        - label: "This report is safe to publish; suspected vulnerabilities or sensitive details will be reported privately under SECURITY.md."
+          required: true
+        - label: "I understand this Issue does not authorize provider calls, paid tests, credential use, or external effects."
+          required: true
