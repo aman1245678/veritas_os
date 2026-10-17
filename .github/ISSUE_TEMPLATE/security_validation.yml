@@ -1,0 +1,91 @@
+name: "Bounded security validation (public)"
+description: "Share safe, non-sensitive verification results scoped to a specific commit and test boundary."
+title: "[Validation] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Public, non-sensitive validation only.** Do not submit exploitable vulnerabilities, attack payloads, bypass techniques, private/customer data, credentials, or secret-bearing logs here.
+        For a suspected flaw or uncertainty about disclosure, **report privately** using [SECURITY.md](https://github.com/veritasfuji-japan/veritas_os/blob/main/SECURITY.md).
+        A passing test does not imply production certification or a universal security guarantee.
+        Do not run live providers, paid workflows, or external effects without separate explicit owner approval.
+  - type: input
+    id: test_id
+    attributes:
+      label: "Test / proof identifier"
+      placeholder: "e.g. a bounded fixture name, test node ID, or proof pack"
+    validations:
+      required: true
+  - type: input
+    id: verified_sha
+    attributes:
+      label: "Exact tested commit SHA"
+      placeholder: "40-character SHA of the tested code"
+    validations:
+      required: true
+  - type: textarea
+    id: boundary
+    attributes:
+      label: "Scope and assumptions"
+      description: "Define registered adapter/route, policy assumptions, trust boundaries, and what is NOT covered. Do not include exploit details."
+    validations:
+      required: true
+  - type: dropdown
+    id: setup
+    attributes:
+      label: "Test environment"
+      options:
+        - "Offline / NO_EFFECT"
+        - "Controlled synthetic fixture"
+        - "Approved isolated integration environment"
+        - "Other / unknown (explain below)"
+    validations:
+      required: true
+  - type: textarea
+    id: procedure
+    attributes:
+      label: "Safe reproduction procedure"
+      description: "Only non-sensitive, non-exploitable steps. If details disclose a weakness, stop and use the private route."
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: "Expected result"
+    validations:
+      required: true
+  - type: textarea
+    id: observed
+    attributes:
+      label: "Observed result and limitations"
+      description: "State PASS / FAIL / INCONCLUSIVE for the scoped test, and note exclusions. Do not claim a global PROVEN status."
+    validations:
+      required: true
+  - type: dropdown
+    id: external_effect
+    attributes:
+      label: "External effect status"
+      options:
+        - "NO_EFFECT — offline/no external mutation"
+        - "Synthetic fixture effect only"
+        - "Pre-dispatch refusal / blocked"
+        - "Approved real effect observed"
+        - "EFFECT_UNKNOWN — do not retry or infer failure"
+    validations:
+      required: true
+  - type: textarea
+    id: provenance
+    attributes:
+      label: "Evidence provenance (safe references only)"
+      description: "Provide CI run/job IDs, non-sensitive artifact links, digests, and test names; do not expose exploit payloads."
+    validations:
+      required: false
+  - type: checkboxes
+    id: safety
+    attributes:
+      label: "Disclosure and execution boundaries"
+      options:
+        - label: "The content is safe for public disclosure and contains no sensitive vulnerability details or secrets."
+          required: true
+        - label: "Any provider cost, real execution, or credential use requires separate explicit authorization; this Issue grants none."
+          required: true
