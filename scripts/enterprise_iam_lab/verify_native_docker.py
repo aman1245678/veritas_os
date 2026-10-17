@@ -159,6 +159,7 @@ def verify(
     process_restart_recovery: bool = False,
     signed_ack_reconciliation: bool = False,
     ack_freshness: bool = False,
+    require_target_source_bound: bool = False,
 ) -> dict:
     top = verify_topology(config)
     assert top["target_verifier_key_not_mounted_on_executor_or_agent"]
@@ -177,11 +178,23 @@ def verify(
         lost_ack_recovery and require_native_postgres and not process_restart_recovery
     )
     assert not ack_freshness or signed_ack_reconciliation
+    assert not require_target_source_bound or (ack_freshness and require_native_postgres)
     assert trust_dir is not None and permit_dir is not None
     assert re.fullmatch(r"[0-9a-f]{40}", source_sha)
     assert source_sha == expected_sha
 
     verify_denials(folder)
+    if require_target_source_bound:
+        _require_http(_load(folder / "legacy_v1_denied.json"),
+                      "legacy-v1", 403, "permit_denied")
+        target = config["services"]["iam-target"]
+        assert target["environment"]["LAB_TARGET_SOURCE_BOUND_PERMIT"] == "1"
+        assert target["environment"]["LAB_TARGET_ORIGIN_VERIFIER_PEM"] == (
+            "/run/lab/trust/origin-public.pem"
+        )
+        assert any(v.get("target") == "/run/lab/trust"
+                   and v.get("read_only", True)
+                   for v in target["volumes"])
     if lost_ack_recovery:
         # This is explicitly NOT an HTTP 201 observation. The target ledger
         # and real PostgreSQL effect state must prove the result separately.
@@ -251,7 +264,7 @@ def verify(
     assert success == [(consumption[5], "scoped-executor", 201, "committed")]
     assert len([item for item in state["audit"] if item[2] == 409 and item[3] == "permit_replayed"]) == 1
     assert len([item for item in state["audit"] if item[2] == 400 and item[3] == "invalid_mutation"]) == 1
-    assert len([item for item in state["audit"] if item[2] == 403 and item[3] == "permit_denied"]) == 2
+    assert len([item for item in state["audit"] if item[2] == 403 and item[3] == "permit_denied"]) == (3 if require_target_source_bound else 2)
     assert len([item for item in state["audit"] if item[2] == 403 and item[3] == "target_scope_denied"]) == 1
 
     # Inspect original target-owned consumption timestamp, not issuer's
@@ -263,6 +276,25 @@ def verify(
         ).fetchone()[0]
     consumed_at = datetime.fromisoformat(consumed_at_str)
     assert consumed_at.tzinfo is not None
+    if require_target_source_bound:
+        from scripts.enterprise_iam_lab.signed_permit import V2
+        from scripts.enterprise_iam_lab.source_bound_target_policy import verify_target_source
+        assert verified["version"] == V2
+        assert receipt["target_source_bound_v2_requested"] is True
+        assert receipt["source_bound_target_permit_version"] == V2
+        assert receipt["independently_operated_rcc_source"] is False
+        pinned_origin = (trust_dir / "origin-public.pem").read_bytes()
+        nonce = verify_target_source(
+            verified, pinned_origin, now=consumed_at,
+        )
+        with sqlite3.connect(database.as_uri() + "?mode=ro", uri=True) as db:
+            rows = db.execute(
+                "SELECT source_nonce_sha256 FROM permit_consumptions "
+                "WHERE permit_id = ?", (verified["permit_id"],),
+            ).fetchall()
+        assert rows == [(nonce,)], "TARGET_SOURCE_NONCE_NOT_PERSISTED"
+        assert nonce == verified["source_nonce_sha256"]
+
     assert issued_at <= consumed_at.astimezone(timezone.utc) < expiration
 
     postgres_evidence = (
@@ -426,6 +458,9 @@ def verify(
         **postgres_evidence,
         **reconciliation_report,
         "target_native_permit_binding_verified": True,
+        "target_source_bound_v2_proof": require_target_source_bound,
+        "source_nonce_target_single_use_ledger_checked": require_target_source_bound,
+        "actual_independently_operated_rcc_source": False,
         "real_mtls_allowed_exactly_once": True,
         "replay_rejected": True,
         "target_grants": len(state["grants"]),
@@ -453,6 +488,7 @@ def main() -> None:
     parser.add_argument("--process-restart-recovery", action="store_true")
     parser.add_argument("--signed-ack-reconciliation", action="store_true")
     parser.add_argument("--ack-freshness", action="store_true")
+    parser.add_argument("--require-target-source-bound", action="store_true")
     args = parser.parse_args()
     result = verify(
         phase=args.phase, folder=args.report_dir,
@@ -464,6 +500,7 @@ def main() -> None:
         process_restart_recovery=args.process_restart_recovery,
         signed_ack_reconciliation=args.signed_ack_reconciliation,
         ack_freshness=args.ack_freshness,
+        require_target_source_bound=args.require_target_source_bound,
     )
     output = args.report_dir / ("verification_" + args.phase.replace("-", "_") + ".json")
     output.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8")

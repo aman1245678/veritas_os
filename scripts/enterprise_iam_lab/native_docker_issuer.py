@@ -147,7 +147,8 @@ async def issue(issuer_dir: Path, trust_dir: Path, permit_dir: Path,
                 evidence_dir: Path, *, durable_postgres: bool = False,
                 persist_effect_in_flight: bool = False,
                 source_attestation: Path | None = None,
-                source_trust_key: Path | None = None) -> dict:
+                source_trust_key: Path | None = None,
+                source_bound_target_permit: bool = False) -> dict:
     """Use only trusted exact store classes; PostgreSQL is mandatory in durable mode."""
     if type(durable_postgres) is not bool:
         raise ValueError("IAM_NATIVE_STORE_MODE_INVALID")
@@ -172,6 +173,10 @@ async def issue(issuer_dir: Path, trust_dir: Path, permit_dir: Path,
             json.loads(source_attestation.read_text(encoding="utf-8")),
             source_trust_key.read_bytes(), now=datetime.now(timezone.utc),
         )
+    if source_bound_target_permit and (
+            source_payload is None or not durable_postgres
+            or not persist_effect_in_flight):
+        raise ValueError("IAM2384_SOURCE_BOUND_REQUIRES_APPROVED_DURABLE_NATIVE_PATH")
     key_file = issuer_dir / KEY_NAME
     if not key_file.is_file() or not permit_dir.is_dir() or not evidence_dir.is_dir():
         raise ValueError("prepared trusted issuer and output dirs required")
@@ -223,6 +228,41 @@ async def issue(issuer_dir: Path, trust_dir: Path, permit_dir: Path,
             allow_in_memory_for_testing=not durable_postgres,
         )
         verified = verify_permit(envelope, signer.public_key(), actual)
+        legacy_signed_v1_envelope = envelope
+        if source_bound_target_permit:
+            # Consume native authority FIRST; never allow an input signature
+            # to replace Human Approval. The executable v2 Permit now signs
+            # the original request+candidate, freshness nonce and full signed
+            # origin envelope, so the target can independently reverify.
+            source_envelope = json.loads(
+                source_attestation.read_text(encoding="utf-8"),
+            )
+            if origin.verify_origin(
+                source_envelope, source_trust_key.read_bytes(), now=actual,
+            ) != source_payload:
+                raise ValueError("IAM2384_SOURCE_CHANGED_BEFORE_PERMIT_ISSUANCE")
+            from scripts.enterprise_iam_lab.signed_permit import V2
+            from scripts.enterprise_iam_lab.source_bound_target_policy import (
+                verify_target_source,
+            )
+            verified = {
+                **verified,
+                "version": V2,
+                "original_request_digest": source_payload["original_request_digest"],
+                "candidate_digest": source_payload["candidate_digest"],
+                "source_attestation_digest": origin.sha(source_payload),
+                "source_nonce_sha256": hashlib.sha256(
+                    source_payload["nonce"].encode("ascii"),
+                ).hexdigest(),
+                "source_envelope": source_envelope,
+            }
+            # Cryptographic proof is issuer-owned, source proof is separately
+            # signed, AND the same target policy must accept exact semantics.
+            verify_target_source(
+                verified, source_trust_key.read_bytes(), now=actual,
+            )
+            envelope = sign_permit(verified, signer)
+            verified = verify_permit(envelope, signer.public_key(), actual)
         entry = await store.get(artifact.authorization_id)
         if persist_effect_in_flight:
             if entry is None:
@@ -256,6 +296,13 @@ async def issue(issuer_dir: Path, trust_dir: Path, permit_dir: Path,
     # or forge a replacement permit from an unverified success boolean.
     if datetime.fromisoformat(verified["expires_at"]) - datetime.now(timezone.utc) < timedelta(seconds=3):
         raise ValueError("NATIVE_PERMIT_EXPIRED_BEFORE_TRANSFER")
+    if source_bound_target_permit:
+        # A VALID signed legacy permit must be rejected by the opt-in v2
+        # target before the first effect (not merely rejected as bad sig).
+        _write_exclusive(
+            permit_dir / "legacy-v1.json",
+            (json.dumps(legacy_signed_v1_envelope, sort_keys=True) + "\n").encode("utf-8"),
+        )
     invalid = sign_permit(verified, Ed25519PrivateKey.generate())
     tampered = {
         "payload": {**verified, "scope": "saas:read"},
@@ -324,8 +371,15 @@ async def issue(issuer_dir: Path, trust_dir: Path, permit_dir: Path,
             "source_attestation_digest": origin.sha(source_payload),
             "source_bridge_signed_evidence_only": True,
             "target_enforces_source_digest": False,
+            "target_source_bound_v2_requested": source_bound_target_permit,
             "actual_rcc_416_candidate_executed": False,
         })
+    if source_bound_target_permit:
+        receipt["source_bound_target_permit_version"] = (
+            "isolated-iam-permit-v2-source-bound"
+        )
+        receipt["source_nonce_target_replay_fence_required"] = True
+        receipt["independently_operated_rcc_source"] = False
     (evidence_dir / RECEIPT).write_text(
         json.dumps(receipt, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
@@ -343,6 +397,7 @@ def main() -> None:
     parser.add_argument("--persist-effect-in-flight", action="store_true")
     parser.add_argument("--source-attestation", type=Path)
     parser.add_argument("--source-trust-key", type=Path)
+    parser.add_argument("--source-bound-target-permit", action="store_true")
     args = parser.parse_args()
     if args.phase == "prepare":
         prepare(args.issuer_dir, args.trust_dir)
@@ -356,6 +411,7 @@ def main() -> None:
         persist_effect_in_flight=args.persist_effect_in_flight,
         source_attestation=args.source_attestation,
         source_trust_key=args.source_trust_key,
+        source_bound_target_permit=args.source_bound_target_permit,
     ))
     print(json.dumps({
         "result": receipt["result"], "issuer_mode": receipt["issuer_mode"],

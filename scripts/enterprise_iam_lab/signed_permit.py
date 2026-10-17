@@ -10,6 +10,7 @@ import binascii
 import json
 from datetime import datetime, timezone
 from typing import Any, Mapping
+import re
 
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
@@ -19,6 +20,12 @@ REQUIRED = frozenset({
     "execution_intent_id", "request_id", "method", "path", "subject",
     "role", "scope", "not_before", "expires_at",
 })
+SOURCE_FIELDS_V2 = frozenset({
+    "source_envelope", "original_request_digest", "candidate_digest",
+    "source_attestation_digest", "source_nonce_sha256",
+})
+V2 = "isolated-iam-permit-v2-source-bound"
+
 EXPECTED = {
     "version": "isolated-iam-permit-v1",
     "audience": "isolated-iam-target",
@@ -35,9 +42,34 @@ class PermitRejected(ValueError):
 
 
 def canonical(payload: Mapping[str, Any]) -> bytes:
-    if set(payload) != REQUIRED or any(type(value) is not str or not value for value in payload.values()):
+    if not isinstance(payload, Mapping):
         raise PermitRejected("invalid_permit_fields")
-    return json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("ascii")
+    version = payload.get("version")
+    if version == EXPECTED["version"]:
+        if set(payload) != REQUIRED:
+            raise PermitRejected("invalid_permit_fields")
+    elif version == V2:
+        if set(payload) != (REQUIRED | SOURCE_FIELDS_V2):
+            raise PermitRejected("invalid_v2_permit_fields")
+        source = payload.get("source_envelope")
+        if (type(source) is not dict or set(source) != {"payload", "signature"}
+                or type(source.get("payload")) is not dict
+                or type(source.get("signature")) is not str):
+            raise PermitRejected("invalid_source_envelope")
+        if any(type(payload.get(field)) is not str
+               or re.fullmatch(r"[a-f0-9]{64}", payload[field]) is None
+               for field in SOURCE_FIELDS_V2 - {"source_envelope"}):
+            raise PermitRejected("invalid_v2_source_hash")
+    else:
+        raise PermitRejected("permit_version_unsupported")
+    if any(type(payload.get(key)) is not str or not payload[key]
+           for key in REQUIRED):
+        raise PermitRejected("invalid_permit_fields")
+    try:
+        return json.dumps(payload, sort_keys=True, separators=(",", ":"),
+                          ensure_ascii=True, allow_nan=False).encode("ascii")
+    except (TypeError, ValueError, UnicodeError) as exc:
+        raise PermitRejected("noncanonical_permit_fields") from exc
 
 
 def _time(value: str) -> datetime:
@@ -52,7 +84,7 @@ def _time(value: str) -> datetime:
 
 def validate_claims(payload: Mapping[str, Any], now: datetime) -> None:
     canonical(payload)
-    if any(payload[key] != value for key, value in EXPECTED.items()):
+    if any(payload[key] != value for key, value in EXPECTED.items() if key != "version"):
         raise PermitRejected("effect_binding_mismatch")
     if not isinstance(now, datetime) or now.tzinfo is None:
         raise PermitRejected("invalid_verification_clock")

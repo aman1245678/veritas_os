@@ -60,6 +60,18 @@ fi
 # #2383 opt-in: signed controlled-source IAM proposal, not #416 counter
 # authority. Requires native durable path and downstream target verification.
 IAM_SOURCE_BOUND_ARGS=()
+# Target v2 is opt-in and requires ALL #2383 + durable mTLS/PG/nonce gates.
+if [[ "${LAB_TARGET_SOURCE_BOUND_PERMIT:-0}" == "1" ]]; then
+  [[ "${LAB_SOURCE_BOUND_IAM_ADMISSION:-0}" == "1" &&
+     "${LAB_NATIVE_DURABLE_PG:-0}" == "1" &&
+     "${LAB_DURABLE_CHALLENGE:-0}" == "1" &&
+     "${LAB_TARGET_ACK_FRESHNESS:-0}" == "1" ]] ||
+    { echo "IAM2384_TARGET_V2_REQUIRES_ALL_NATIVE_SOURCE_PG_ACK_GATES" >&2; exit 2; }
+  IAM_NATIVE_VERIFY_ARGS+=(--require-target-source-bound)
+elif [[ "${LAB_TARGET_SOURCE_BOUND_PERMIT:-0}" != "0" ]]; then
+  echo "IAM2384_INVALID_TARGET_SOURCE_BOUND_MODE" >&2
+  exit 2
+fi
 if [[ "${LAB_SOURCE_BOUND_IAM_ADMISSION:-0}" == "1" ]]; then
   [[ "${LAB_NATIVE_DURABLE_PG:-0}" == "1" &&
      "${LAB_NATIVE_LOST_ACK:-0}" == "1" &&
@@ -148,7 +160,11 @@ if [[ "${LAB_TARGET_READONLY_ACK:-0}" == "1" ]]; then
     --public "$LAB_READONLY_REF_DIR/target-ack-public.pem" \
     > "$REPORT_DIR/target_readonly_signer_setup.json"
   COMPOSE=(docker compose -f compose.enterprise-iam-permit-transport.yml \
-    -f compose.enterprise-iam-readonly-ack-2379.override.yml -p "$LAB_PROJECT")
+    -f compose.enterprise-iam-readonly-ack-2379.override.yml)
+  if [[ "${LAB_TARGET_SOURCE_BOUND_PERMIT:-0}" == "1" ]]; then
+    COMPOSE+=(-f compose.enterprise-iam-source-bound-target-2384.override.yml)
+  fi
+  COMPOSE+=(-p "$LAB_PROJECT")
 else
   COMPOSE=(docker compose -f compose.enterprise-iam-permit-transport.yml -p "$LAB_PROJECT")
 fi
@@ -163,6 +179,15 @@ trap cleanup EXIT
 python3 scripts/enterprise_iam_lab/native_docker_issuer.py \
   --phase prepare --issuer-dir "$LAB_ISSUER_DIR" --trust-dir "$LAB_TRUST_DIR" \
   > "$REPORT_DIR/native_issuer_prepare.json"
+
+if [[ "${LAB_TARGET_SOURCE_BOUND_PERMIT:-0}" == "1" ]]; then
+  # Pin source origin trust material on the target before it starts.
+  python3 -m scripts.enterprise_iam_lab.source_bound_iam_origin \
+    prepare-synthetic-origin --origin-dir "$LAB_ORIGIN_DIR" \
+    --trust-dir "$LAB_TRUST_DIR" \
+    --attestation "$REPORT_DIR/iam_synthetic_source_attestation.json" \
+    > "$REPORT_DIR/iam_source_prepare.json"
+fi
 
 # Disposable TLS CA and leaf credentials. CA PRIVATE KEY is never mounted.
 openssl req -x509 -newkey rsa:2048 -nodes -days 1 \
@@ -248,15 +273,20 @@ python3 scripts/enterprise_iam_lab/verify_native_docker.py \
 # plus public key. The selected /v1/decide candidate MUST match it before
 # the native approval and one-time durable authorization consumption.
 if [[ "${LAB_SOURCE_BOUND_IAM_ADMISSION:-0}" == "1" ]]; then
-  python3 -m scripts.enterprise_iam_lab.source_bound_iam_origin \
+  if [[ "${LAB_TARGET_SOURCE_BOUND_PERMIT:-0}" != "1" ]]; then
+    python3 -m scripts.enterprise_iam_lab.source_bound_iam_origin \
     prepare-synthetic-origin --origin-dir "$LAB_ORIGIN_DIR" \
     --trust-dir "$LAB_TRUST_DIR" \
     --attestation "$REPORT_DIR/iam_synthetic_source_attestation.json" \
     > "$REPORT_DIR/iam_source_prepare.json"
+  fi
   IAM_SOURCE_BOUND_ARGS=(
     --source-attestation "$REPORT_DIR/iam_synthetic_source_attestation.json"
     --source-trust-key "$LAB_TRUST_DIR/origin-public.pem"
   )
+  if [[ "${LAB_TARGET_SOURCE_BOUND_PERMIT:-0}" == "1" ]]; then
+    IAM_SOURCE_BOUND_ARGS+=(--source-bound-target-permit)
+  fi
 fi
 
 # CRITICAL: issue native signed approval + consume ONLY when Docker target is
@@ -267,6 +297,12 @@ python3 scripts/enterprise_iam_lab/native_docker_issuer.py \
   --permit-dir "$LAB_PERMIT_DIR" --evidence-dir "$REPORT_DIR" \
   "${IAM_NATIVE_ISSUE_ARGS[@]}" "${IAM_SOURCE_BOUND_ARGS[@]}" \
   > "$REPORT_DIR/native_issuer_run.json"
+
+# Reject a genuinely signed v1 IAM Permit BEFORE the v2 effect.
+if [[ "${LAB_TARGET_SOURCE_BOUND_PERMIT:-0}" == "1" ]]; then
+  LAB_CASE=legacy-v1 "${COMPOSE[@]}" --profile probes run --rm --no-deps -T scoped-executor \
+    > "$REPORT_DIR/legacy_v1_denied.json"
+fi
 
 # Keep ALLOW and replay IMMEDIATELY after native consume, before secondary
 # probes, to avoid substituting a longer-lived synthetic permit.
