@@ -276,8 +276,15 @@ class Handler(BaseHTTPRequestHandler):
                 # The target independently checks origin-signer trust, exact
                 # authorized IAM request/candidate, digest, expiry, nonce and
                 # target/role binding. This is not a post-fact host report.
-                from source_bound_target_policy import verify_target_source
+                from source_bound_target_policy import (
+                    verify_target_source, verify_external_origin_pin,
+                )
                 origin_key = Path(os.environ["LAB_TARGET_ORIGIN_VERIFIER_PEM"]).read_bytes()
+                if os.getenv("LAB_TARGET_REQUIRE_EXTERNAL_RCC_PIN", "0") == "1":
+                    verify_external_origin_pin(
+                        origin_key,
+                        os.environ["LAB_TARGET_EXPECTED_ORIGIN_SPKI_SHA256"],
+                    )
                 source_digest = verify_target_source(permit, origin_key, now=now)
             elif permit["version"] != "isolated-iam-permit-v1":
                 raise PermitRejected("source_v2_requires_target_gate")
