@@ -5,5 +5,7 @@ services:
     environment:
       LAB_TARGET_SOURCE_BOUND_PERMIT: "1"
       LAB_TARGET_ORIGIN_VERIFIER_PEM: /run/lab/trust/origin-public.pem
+      LAB_TARGET_REQUIRE_EXTERNAL_RCC_PIN: "${LAB_RCC_EXTERNAL_SOURCE_MODE:-0}"
+      LAB_TARGET_EXPECTED_ORIGIN_SPKI_SHA256: "${LAB_RCC_TRUST_SPKI_SHA256:-}"
     volumes:
       - ./scripts/enterprise_iam_lab/source_bound_target_policy.py:/app/source_bound_target_policy.py:ro
