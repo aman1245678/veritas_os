@@ -31,7 +31,7 @@ python -m pytest -q veritas_os/tests/test_evolve_trustledger_m1.py
 The ZIP's `build_cases.py`, `build_cases_fixed.py`, and
 `evolve_runner_v2.py` are **never** executed.
 
-The output is a synthetic boundary report. `layer_1` only recognizes the
+The manifest uses a **list** of `{path, sha256}` entries with POSIX-style paths, while ZIP member names use literal backslashes. The harness independently checks every listed raw-byte SHA-256 and rejects missing, unlisted or duplicate ZIP members. The three bundled partner scripts are hash-checked as inert data, **never executed**. Synthetic regression tests generate a partner-shaped ZIP in memory; no partner evidence package is checked into this repository.\n\nThe output is a synthetic boundary report. `layer_1` only recognizes the
 fixed test schema/issuer; `layer_2` recomputes canonical claims from the
 received receipt, checks the embedded hash, evaluates the local test window,
 and binds organization/assessment against `live_state.json`. `layer_3`
@@ -68,13 +68,12 @@ Case 6 must not mark unevaluated freshness checks as PASS.
 
 The received `VERITAS_M1_Final_Oct18b.zip` has passed independent package
 integrity checks in the review process, but **has not been frozen**.
-Two source-record inconsistencies remain pending partner correction:
+The Oct19 revision still has outstanding evidence-record issues pending partner correction:
 
 1. Case 3 still contains mixed evaluation dates in the gate explanation and
    case metadata. The local `live_state.json` and other evidence timestamps
    must be reconciled to the final frozen case definition.
-2. Case 6 describes Layer 2 as both FAILED and NOT REACHED, and marks
-   unevaluated freshness as passing.
+2. Case 5 still reports positive freshness and context-binding booleans even though Layer 1 rejects the issuer.\n3. Case 6 correctly marks Layer 2 as NOT_REACHED, but its context-binding check is still reported as failed despite not being reached.\n\nThe received Oct19 ZIP and its MANIFEST SHA-256 were independently matched against the sender's values; manifest-listed hashes and input fingerprints also match. That is **byte integrity**, not evidence-record consistency, issuer authenticity or freeze approval.
 
 Do not claim this harness passes the frozen six-case run before the revised
 ZIP is received, independently checked and explicitly frozen.
