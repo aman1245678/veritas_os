@@ -26,7 +26,7 @@ _CLAIMS_EXCLUDED = frozenset({
     "canonical_claims_input",
     "_unknown_field_policy_note",
 })
-_TIMESTAMP_RE = re.compile(r"20\d\d-\d\d-\d\dT\d\d:\d\d:\d\dZ")
+_EVALUATION_TIME_RE = re.compile(\n    r"(?:evaluated\\s+at|evaluation\\s+(?:reference\\s+)?(?:time|timestamp)"\n    r"(?:\\s+set\\s+to)?\\s*[:=]?)\\s*"\n    r"(20\\d\\d-\\d\\d-\\d\\dT\\d\\d:\\d\\d:\\d\\dZ)",\n    re.IGNORECASE,\n)
 
 
 def _sha256(data: bytes) -> str:
@@ -301,7 +301,7 @@ def evaluate_synthetic_zip(path: str | Path) -> dict[str, Any]:
                 )
                 for label, value in zip(("gate_reason", "case_meta_context"), texts, strict=True):
                     if isinstance(value, str) and any(
-                        t != reference_time for t in _TIMESTAMP_RE.findall(value)
+                        t != reference_time for t in _EVALUATION_TIME_RE.findall(value)
                     ):
                         case["record_warnings"].append("timestamp_mismatch:" + label)
             if number in (5, 6):
