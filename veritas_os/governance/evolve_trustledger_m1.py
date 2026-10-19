@@ -221,7 +221,7 @@ def evaluate_synthetic_zip(path: str | Path) -> dict[str, Any]:
             if not isinstance(entries, dict):
                 raise ValueError("manifest_case_entries_invalid")
             for name, expected in entries.items():
-                entry = folder + "\\\\" + name
+                entry = folder + "\\" + name
                 try:
                     actual = _sha256(archive.read(entry))
                 except KeyError:
