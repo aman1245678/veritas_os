@@ -233,10 +233,10 @@ def evaluate_synthetic_zip(path: str | Path) -> dict[str, Any]:
             # The partner manifest uses POSIX-style paths; the ZIP uses
             # literal backslashes as member-name separators.
             if (declared_path.startswith("/")
-                    or "\\\\" in declared_path
+                    or chr(92) in declared_path
                     or any(part in {"", ".", ".."} for part in declared_path.split("/"))):
                 raise ValueError("unsafe_manifest_path")
-            member = declared_path.replace("/", "\\\\")
+            member = declared_path.replace("/", chr(92))
             if member in expected_paths or member == "MANIFEST.json":
                 raise ValueError("duplicate_or_self_referential_manifest_entry")
             expected_paths.add(member)
