@@ -275,6 +275,10 @@ def evaluate_synthetic_zip(path: str | Path) -> dict[str, Any]:
                 case["record_warnings"].append("partner_input_fingerprint_mismatch")
             # Detect contradictory source descriptions independently of L1/L2.
             meta = _parse_json(args["case_meta_raw"])
+            case["case_id"] = meta.get("case_id")
+            gate = partner.get("adoption_gate", {})
+            if isinstance(gate, dict):
+                case["partner_gate_claim"] = gate.get("gate_decision")
             timestamp = _parse_json(args["live_state_raw"]).get("evaluation_timestamp")
             reference_time = fp.get("evaluation_timestamp") if isinstance(fp, dict) else None
             if reference_time is not None and reference_time != timestamp:
