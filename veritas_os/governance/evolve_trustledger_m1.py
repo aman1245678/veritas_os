@@ -300,15 +300,30 @@ def evaluate_synthetic_zip(path: str | Path) -> dict[str, Any]:
                         t != reference_time for t in _TIMESTAMP_RE.findall(value)
                     ):
                         case["record_warnings"].append("timestamp_mismatch:" + label)
-            if number == 6:
-                layer2 = partner.get("three_state_result", {}).get(
-                    "layer_2_provenance_verification", {}
+            if number in (5, 6):
+                # A Layer 1 rejection prevents gated Layer 2 evaluation.
+                layer2_status = str(layer2_info.get("result", "")).replace("_", " ").upper()
+                if "NOT REACHED" not in layer2_status:
+                    case["record_warnings"].append("layer2_not_marked_unreached")
+                for field, source in (
+                    ("freshness_pass", partner.get("freshness_check", {})),
+                    ("context_binding_pass", partner.get("context_binding_check", {})),
+                ):
+                    if isinstance(source, dict) and isinstance(source.get(field), bool):
+                        case["record_warnings"].append("unreached_subcheck_boolean:" + field)
+                subchecks = layer2_info.get("subchecks", {})
+                if isinstance(subchecks, dict):
+                    for field, status in subchecks.items():
+                        if status != "not_evaluated":
+                            case["record_warnings"].append("unreached_subcheck_status:" + field)
+                context_note = partner.get("context_binding_check", {}).get(
+                    "interpretation", ""
                 )
-                if ("not reached" in str(layer2.get("note", "")).lower()
-                        and "fail" in str(layer2.get("result", "")).lower()):
-                    case["record_warnings"].append("layer2_failed_but_not_reached")
-                if partner.get("freshness_check", {}).get("freshness_pass") is True:
-                    case["record_warnings"].append("unreached_freshness_marked_pass")
+                if isinstance(context_note, str) and (
+                    "CONTEXT BINDING FAIL" in context_note.upper()
+                    or "CONTEXT BINDING CONFIRMED" in context_note.upper()
+                ):
+                    case["record_warnings"].append("unreached_context_described_as_executed")
             output["cases"].append(case)
     output["records_reconciled"] = (
         output["manifest_integrity_pass"]
