@@ -95,6 +95,8 @@ def _historical_complete_sections(
         raise _LegacyRgcInvalid("neomundi_v01_schema_version_unsupported")
     for field in ("request_id", "trace_id", "system_id", "model", "mode"):
         _require_text(identity, field, "neomundi_v01_identity_invalid")
+    if re.fullmatch(r"(local|model-[0-9a-f]{12})", identity["model"]) is None:
+        raise _LegacyRgcInvalid("neomundi_v01_model_identifier_invalid")
     timestamp = _require_text(
         identity, "timestamp", "neomundi_v01_timestamp_invalid"
     )
@@ -118,7 +120,10 @@ def _historical_complete_sections(
         raise _LegacyRgcInvalid("neomundi_v01_scope_unsupported")
     if observation.get("measurement_status") != "complete":
         raise _LegacyRgcInvalid("neomundi_v01_partial_or_unknown_forbidden")
-    if observation.get("measurement_coverage") != 1.0:
+    if (
+        type(observation.get("measurement_coverage")) not in (float, int)
+        or observation["measurement_coverage"] != 1.0
+    ):
         raise _LegacyRgcInvalid("neomundi_v01_complete_coverage_invalid")
     temporal = _require_object(
         observation, "temporal_boundary", "neomundi_v01_temporal_boundary_missing"
