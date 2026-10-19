@@ -270,7 +270,7 @@ def evaluate_synthetic_zip(path: str | Path) -> dict[str, Any]:
                     partner.get("adoption_gate", {}).get("reason", ""),
                     meta.get("evaluation_context", ""),
                 )
-                for label, value in zip(("gate_reason", "case_meta_context"), texts):
+                for label, value in zip(("gate_reason", "case_meta_context"), texts, strict=True):
                     if isinstance(value, str) and any(
                         t != reference_time for t in _TIMESTAMP_RE.findall(value)
                     ):
