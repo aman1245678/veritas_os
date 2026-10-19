@@ -6,7 +6,6 @@ No production observation, signing key, or NeoMundi public key is committed.
 from __future__ import annotations
 
 import base64
-import copy
 import hashlib
 import json
 from datetime import UTC, datetime, timedelta
