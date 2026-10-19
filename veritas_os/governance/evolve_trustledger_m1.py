@@ -251,13 +251,29 @@ def evaluate_synthetic_zip(path: str | Path) -> dict[str, Any]:
             # Detect contradictory source descriptions independently of L1/L2.
             meta = _parse_json(args["case_meta_raw"])
             timestamp = _parse_json(args["live_state_raw"]).get("evaluation_timestamp")
+            reference_time = fp.get("evaluation_timestamp") if isinstance(fp, dict) else None
+            if reference_time is not None and reference_time != timestamp:
+                case["record_warnings"].append("timestamp_mismatch:live_state_vs_fingerprint")
+            freshness_time = partner.get("freshness_check", {}).get("evaluation_timestamp")
+            if freshness_time is not None and reference_time is not None and freshness_time != reference_time:
+                case["record_warnings"].append("timestamp_mismatch:freshness_vs_fingerprint")
+            layer2_info = partner.get("three_state_result", {}).get(
+                "layer_2_provenance_verification", {}
+            )
             if number == 3:
+                layer2_time = layer2_info.get("subchecks", {}).get(
+                    "freshness", {}
+                ).get("evaluation_timestamp")
+                if layer2_time is not None and layer2_time != reference_time:
+                    case["record_warnings"].append("timestamp_mismatch:layer2_vs_fingerprint")
                 texts = (
                     partner.get("adoption_gate", {}).get("reason", ""),
                     meta.get("evaluation_context", ""),
                 )
                 for label, value in zip(("gate_reason", "case_meta_context"), texts):
-                    if isinstance(value, str) and any(t != timestamp for t in _TIMESTAMP_RE.findall(value)):
+                    if isinstance(value, str) and any(
+                        t != reference_time for t in _TIMESTAMP_RE.findall(value)
+                    ):
                         case["record_warnings"].append("timestamp_mismatch:" + label)
             if number == 6:
                 layer2 = partner.get("three_state_result", {}).get(
