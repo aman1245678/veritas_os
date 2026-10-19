@@ -214,21 +214,46 @@ def evaluate_synthetic_zip(path: str | Path) -> dict[str, Any]:
         manifest = _parse_json(manifest_raw)
         output["manifest_sha256"] = _sha256(manifest_raw)
         output["manifest_mismatches"] = []
-        declared = manifest.get("files", {})
-        if not isinstance(declared, dict):
-            raise ValueError("manifest_files_invalid")
-        for folder, entries in declared.items():
-            if not isinstance(entries, dict):
-                raise ValueError("manifest_case_entries_invalid")
-            for name, expected in entries.items():
-                entry = folder + "\\" + name
-                try:
-                    actual = _sha256(archive.read(entry))
-                except KeyError:
-                    actual = "MISSING"
-                if actual != expected:
-                    output["manifest_mismatches"].append(entry)
-        output["manifest_integrity_pass"] = not output["manifest_mismatches"]
+        declared = manifest.get("files")
+        if not isinstance(declared, list) or not declared:
+            raise ValueError("manifest_files_must_be_nonempty_list")
+        archive_names = archive.namelist()
+        if len(archive_names) != len(set(archive_names)):
+            raise ValueError("duplicate_zip_members")
+        expected_paths: set[str] = set()
+        for item in declared:
+            if not isinstance(item, dict):
+                raise ValueError("manifest_file_entry_invalid")
+            declared_path = item.get("path")
+            expected = item.get("sha256")
+            if (not isinstance(declared_path, str)
+                    or not isinstance(expected, str)
+                    or not re.fullmatch(r"sha256:[0-9a-f]{64}", expected)):
+                raise ValueError("manifest_file_path_or_digest_invalid")
+            # The partner manifest uses POSIX-style paths; the ZIP uses
+            # literal backslashes as member-name separators.
+            if (declared_path.startswith("/")
+                    or "\\\\" in declared_path
+                    or any(part in {"", ".", ".."} for part in declared_path.split("/"))):
+                raise ValueError("unsafe_manifest_path")
+            member = declared_path.replace("/", "\\\\")
+            if member in expected_paths or member == "MANIFEST.json":
+                raise ValueError("duplicate_or_self_referential_manifest_entry")
+            expected_paths.add(member)
+            try:
+                actual = _sha256(archive.read(member))
+            except KeyError:
+                actual = "MISSING"
+            if actual != expected:
+                output["manifest_mismatches"].append(declared_path)
+        actual_paths = set(archive_names) - {"MANIFEST.json"}
+        output["unlisted_zip_members"] = sorted(actual_paths - expected_paths)
+        output["missing_zip_members"] = sorted(expected_paths - actual_paths)
+        output["manifest_integrity_pass"] = (
+            not output["manifest_mismatches"]
+            and not output["unlisted_zip_members"]
+            and not output["missing_zip_members"]
+        )
         for number in range(1, 7):
             prefix = f"case-{number}\\"
             args = {
