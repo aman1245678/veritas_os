@@ -184,7 +184,7 @@ def _write_six_case_zip(
             },
             "adoption_gate": {
                 "gate_decision": "ADOPT" if number == 1 else "INELIGIBLE",
-                "reason": "Evaluation timestamp " + expected_time,
+                "reason": (\n                    "FRESHNESS FAIL — authorization window ended 2026-09-19T22:00:00Z; evaluated at " + expected_time\n                    if number == 3 else "Evaluation timestamp " + expected_time\n                ),
             },
             "three_state_result": {
                 "layer_2_provenance_verification": {
@@ -202,7 +202,7 @@ def _write_six_case_zip(
             partner["freshness_check"]["freshness_pass"] = True
         case_meta = {
             "case_id": "case-" + str(number),
-            "evaluation_context": "Evaluation timestamp " + expected_time,
+            "evaluation_context": (\n                "Evaluation reference time set to " + expected_time\n                + " — after window_end 2026-09-19T22:00:00Z"\n                if number == 3 else "Evaluation timestamp " + expected_time\n            ),
         }
         files = {
             "receipt.json": receipt_raw,
