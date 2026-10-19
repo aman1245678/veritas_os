@@ -210,6 +210,25 @@ def evaluate_synthetic_zip(path: str | Path) -> dict[str, Any]:
         "external_effect_performed": False,
     }
     with zipfile.ZipFile(path) as archive:
+        manifest_raw = archive.read("MANIFEST.json")
+        manifest = _parse_json(manifest_raw)
+        output["manifest_sha256"] = _sha256(manifest_raw)
+        output["manifest_mismatches"] = []
+        declared = manifest.get("files", {})
+        if not isinstance(declared, dict):
+            raise ValueError("manifest_files_invalid")
+        for folder, entries in declared.items():
+            if not isinstance(entries, dict):
+                raise ValueError("manifest_case_entries_invalid")
+            for name, expected in entries.items():
+                entry = folder + "\\\\" + name
+                try:
+                    actual = _sha256(archive.read(entry))
+                except KeyError:
+                    actual = "MISSING"
+                if actual != expected:
+                    output["manifest_mismatches"].append(entry)
+        output["manifest_integrity_pass"] = not output["manifest_mismatches"]
         for number in range(1, 7):
             prefix = f"case-{number}\\"
             args = {
@@ -219,8 +238,17 @@ def evaluate_synthetic_zip(path: str | Path) -> dict[str, Any]:
                 "case_meta_raw": archive.read(prefix + "case_meta.json"),
             }
             case = evaluate_synthetic_case(**args)
-            # Detect contradictory source descriptions independently of L1/L2.
+            # Every case must be fingerprint-checked, including L1/L2 rejections.
             partner = _parse_json(args["evolve_output_raw"])
+            fp = partner.get("input_fingerprints", {})
+            case["input_fingerprints_match"] = (
+                isinstance(fp, dict)
+                and fp.get("receipt_sha256") == case["receipt_sha256"]
+                and fp.get("live_state_sha256") == case["live_state_sha256"]
+            )
+            if not case["input_fingerprints_match"]:
+                case["record_warnings"].append("partner_input_fingerprint_mismatch")
+            # Detect contradictory source descriptions independently of L1/L2.
             meta = _parse_json(args["case_meta_raw"])
             timestamp = _parse_json(args["live_state_raw"]).get("evaluation_timestamp")
             if number == 3:
@@ -241,7 +269,10 @@ def evaluate_synthetic_zip(path: str | Path) -> dict[str, Any]:
                 if partner.get("freshness_check", {}).get("freshness_pass") is True:
                     case["record_warnings"].append("unreached_freshness_marked_pass")
             output["cases"].append(case)
-    output["records_reconciled"] = all(not c["record_warnings"] for c in output["cases"])
+    output["records_reconciled"] = (
+        output["manifest_integrity_pass"]
+        and all(not c["record_warnings"] for c in output["cases"])
+    )
     return output
 
 
