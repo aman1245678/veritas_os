@@ -26,7 +26,12 @@ _CLAIMS_EXCLUDED = frozenset({
     "canonical_claims_input",
     "_unknown_field_policy_note",
 })
-_EVALUATION_TIME_RE = re.compile(\n    r"(?:evaluated\\s+at|evaluation\\s+(?:reference\\s+)?(?:time|timestamp)"\n    r"(?:\\s+set\\s+to)?\\s*[:=]?)\\s*"\n    r"(20\\d\\d-\\d\\d-\\d\\dT\\d\\d:\\d\\d:\\d\\dZ)",\n    re.IGNORECASE,\n)
+_EVALUATION_TIME_RE = re.compile(
+    r"(?:evaluated\s+at|evaluation\s+(?:reference\s+)?(?:time|timestamp)"
+    r"(?:\s+set\s+to)?\s*[:=]?)\s*"
+    r"(20\d\d-\d\d-\d\dT\d\d:\d\d:\d\dZ)",
+    re.IGNORECASE,
+)
 
 
 def _sha256(data: bytes) -> str:
