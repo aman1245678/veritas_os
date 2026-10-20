@@ -23,6 +23,7 @@
 [![LinkedIn](https://img.shields.io/badge/LinkedIn-Takeshi%20Fujishita-0A66C2?logo=linkedin&logoColor=white)](https://www.linkedin.com/in/takeshi-fujishita-279709392?utm_source=share&utm_campaign=share_via&utm_content=profile&utm_medium=ios_app)
 
 **[Website](https://veritas-website-navy.vercel.app/)** ·
+**[Engineering Evaluation (10–15 min)](docs/en/guides/engineering-evaluation-quickstart.md)** ·
 **[Reviewer Entry Point](docs/REVIEWER_ENTRYPOINT.md)** ·
 **[Implementation Matrix](docs/en/validation/current-implementation-matrix.md)** ·
 **[Technical Proof Pack](docs/en/validation/technical-proof-pack.md)** ·
