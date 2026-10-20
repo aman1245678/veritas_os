@@ -268,6 +268,12 @@ def test_explicit_signed_legacy_complete_is_measurement_only() -> None:
         ),
         (
             lambda a: a["observation"]["observed_signals"].__setitem__(
+                "coherence_score", 10**400
+            ),
+            "neomundi_v01_measured_signal_invalid",
+        ),
+        (
+            lambda a: a["observation"]["observed_signals"].__setitem__(
                 "observation_class_scope", "global"
             ),
             "neomundi_v01_measurement_domain_missing",
