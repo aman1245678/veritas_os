@@ -65,8 +65,8 @@ exact match, bound into the provider verifier policy hash.
 ## Invocation
 
 Run from a properly installed VERITAS checkout, in a secure local
-environment, after independent public-key approval. Use a **new, empty**
-output directory for every attempt. The CLI does **not** accept an
+environment, after independent public-key approval. Use a **new output-directory path that does not already exist**
+for every attempt. The CLI does **not** accept an
 artificial `--now` argument.
 
 ```bash
@@ -104,8 +104,20 @@ On success, the CLI creates:
 - `evidence_manifest.json` — exact input bytes and output hashes,
   verifier policy and replay binding.
 
-On failure, only `verification_report.json` is written to the
-new empty output directory; no evidence-success files are emitted.
+Results are staged in a private sibling directory and atomically
+published under `--output-dir` only after **all** result files have
+been written. On normal verification failure, only a failure-status
+`verification_report.json` is published. On write or atomic-rename
+failure, the output directory is not published at all and the CLI
+returns a nonzero status. These guarantees cover ordinary operating
+system errors during publication, not all power-loss scenarios.
+
+**Important:** Generic replay consumption occurs before output
+publication. If publication fails after successful verification,
+the replay marker **remains consumed**; the operator must investigate
+and reconcile that attempt rather than blindly redispatch the same
+observation or reset the replay marker. No success result is
+reported on publication failure.
 Input and output files may contain controlled partner data.
 Do not commit them or paste them into a public issue/PR.
 
