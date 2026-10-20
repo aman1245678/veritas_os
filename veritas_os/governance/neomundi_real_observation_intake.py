@@ -111,9 +111,12 @@ def bind_neomundi_real_observation_intake(
     artifact_file_sha256: str,
     trusted_jwks_file_sha256: str,
     trusted_key_provenance_receipt_file_sha256: str,
+    expected_artifact_version: str = INTAKE_ARTIFACT_VERSION,
 ) -> NeoMundiRealObservationIntakeBinding:
     """Bind one intake manifest to the exact local packet and artifact identity."""
 
+    if expected_artifact_version not in ("0.1.0", INTAKE_ARTIFACT_VERSION):
+        raise ValueError("neomundi_poc_intake_expected_version_unsupported")
     if not isinstance(manifest, dict):
         raise ValueError("neomundi_poc_intake_manifest_invalid")
     if set(manifest) != _REQUIRED_KEYS:
@@ -125,7 +128,7 @@ def bind_neomundi_real_observation_intake(
         raise ValueError("neomundi_poc_intake_provider_mismatch")
     if manifest.get("artifact_type") != INTAKE_ARTIFACT_TYPE:
         raise ValueError("neomundi_poc_intake_artifact_type_mismatch")
-    if manifest.get("artifact_version") != INTAKE_ARTIFACT_VERSION:
+    if manifest.get("artifact_version") != expected_artifact_version:
         raise ValueError("neomundi_poc_intake_artifact_version_mismatch")
 
     manifest_id = _nonempty_string(
@@ -185,7 +188,7 @@ def bind_neomundi_real_observation_intake(
     if not isinstance(identity, dict) or not isinstance(integrity, dict):
         raise ValueError("neomundi_poc_intake_artifact_invalid")
 
-    if identity.get("schema_version") != INTAKE_ARTIFACT_VERSION:
+    if identity.get("schema_version") != expected_artifact_version:
         raise ValueError("neomundi_poc_intake_artifact_version_mismatch")
     if identity.get("request_id") != artifact_id:
         raise ValueError("neomundi_poc_intake_artifact_id_mismatch")
@@ -199,7 +202,7 @@ def bind_neomundi_real_observation_intake(
         manifest_canonical_sha256=sha256_of_canonical_json(manifest),
         provider_id=INTAKE_PROVIDER_ID,
         artifact_type=INTAKE_ARTIFACT_TYPE,
-        artifact_version=INTAKE_ARTIFACT_VERSION,
+        artifact_version=expected_artifact_version,
         artifact_id=artifact_id,
         expected_key_id=expected_key_id,
         expected_signer_identity=expected_signer_identity,
