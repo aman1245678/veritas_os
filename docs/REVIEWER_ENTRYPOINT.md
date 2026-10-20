@@ -8,6 +8,10 @@ It is designed to clarify current value, implemented scope, proof assets, valida
 
 This entry point is organized around the current enterprise review path: business value, implemented scope, one-day evidence, provider/compliance boundaries, and technical appendices.
 
+## Hands-on engineering evaluation (10–15 minutes)
+
+For engineers who want to reproduce a bounded local/offline validation before reading the longer diligence materials, start with the [Engineering Evaluation Quickstart](en/guides/engineering-evaluation-quickstart.md). It points to existing synthetic reviewer fixtures, the external Bind reference PoC, and the separate customer-scoped pilot discussion. **It is not live enterprise deployment evidence.**
+
 ## 10-minute review path
 
 1. [Enterprise Value Brief](en/positioning/enterprise-value-brief.md) — one-page business/investor overview.
