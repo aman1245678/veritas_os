@@ -244,3 +244,24 @@ def test_freshness_and_expiry_stay_at_generic_boundary(tmp_path: Path) -> None:
         _verify(packet, tmp_path / "expiry", allow_no_expiry=False)
     assert expiry.value.report["stage"] == "generic_external_measurement_boundary"
     assert not list((tmp_path / "expiry").glob("*.json"))
+
+
+
+@pytest.mark.parametrize(
+    ("max_age", "skew"),
+    [(0, 60), (3601, 60), (3600, 61), (-1, 60), (3600, -1)],
+)
+def test_freshness_policy_limits_reject_before_intake(
+    tmp_path: Path, max_age: int, skew: int
+) -> None:
+    with pytest.raises(
+        NeoMundiRealObservationPocError, match="neomundi_v01_intake_policy_invalid"
+    ) as rejected:
+        _verify(
+            _packet(),
+            tmp_path / "replay",
+            max_age_seconds=max_age,
+            max_future_skew_seconds=skew,
+        )
+    assert rejected.value.report["stage"] == "configuration"
+    assert not (tmp_path / "replay").exists()
