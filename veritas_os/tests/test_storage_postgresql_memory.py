@@ -730,6 +730,89 @@ class TestPostgresMemoryStoreFailure:
         with pytest.raises(RuntimeError, match="psycopg not installed"):
             asyncio.run(_go())
 
+    def test_put_propagates_connection_checkout_failure(self) -> None:
+        """put() propagates exceptions raised during pool.connection() checkout."""
+        from veritas_os.storage.postgresql import PostgresMemoryStore
+
+        store = PostgresMemoryStore()
+
+        class _FailingPool:
+            @asynccontextmanager
+            async def connection(self):
+                raise ConnectionError("Connection checkout failed: pool exhausted")
+                yield  # pragma: no cover
+
+        async def _get_pool():
+            return _FailingPool()
+
+        store._get_pool = _get_pool  # type: ignore[assignment]
+
+        with pytest.raises(ConnectionError, match="Connection checkout failed"):
+            asyncio.run(store.put("k", {"v": 1}, user_id="u"))
+
+    def test_put_propagates_execute_failure(self) -> None:
+        """put() propagates exceptions raised during SQL execution."""
+        from veritas_os.storage.postgresql import PostgresMemoryStore
+
+        store = PostgresMemoryStore()
+
+        class _FailingConnection:
+            @asynccontextmanager
+            async def transaction(self):
+                yield
+
+            async def execute(self, query: str, params=None):
+                raise RuntimeError("SQL execution error: disk full")
+
+        class _PoolWithFailingConnection:
+            @asynccontextmanager
+            async def connection(self):
+                yield _FailingConnection()
+
+        async def _get_pool():
+            return _PoolWithFailingConnection()
+
+        store._get_pool = _get_pool  # type: ignore[assignment]
+
+        with pytest.raises(RuntimeError, match="SQL execution error: disk full"):
+            asyncio.run(store.put("k", {"v": 1}, user_id="u"))
+
+    def test_put_propagates_commit_failure_after_execute(self) -> None:
+        """put() propagates transaction-exit failure simulating a commit error.
+
+        Ensures SQL execution completes before the transaction-exit exception is raised.
+        """
+        from veritas_os.storage.postgresql import PostgresMemoryStore
+
+        store = PostgresMemoryStore()
+        executed = False
+
+        class _CommitFailingConnection:
+            @asynccontextmanager
+            async def transaction(self):
+                yield
+                # Simulate commit-time error after execution inside block finishes
+                raise RuntimeError("Simulated transaction commit failure")
+
+            async def execute(self, query: str, params=None):
+                nonlocal executed
+                executed = True
+
+        class _PoolWithCommitFailingConnection:
+            @asynccontextmanager
+            async def connection(self):
+                yield _CommitFailingConnection()
+
+        async def _get_pool():
+            return _PoolWithCommitFailingConnection()
+
+        store._get_pool = _get_pool  # type: ignore[assignment]
+
+        with pytest.raises(RuntimeError, match="Simulated transaction commit failure"):
+            asyncio.run(store.put("k", {"v": 1}, user_id="u"))
+
+        assert executed is True, "SQL execute must complete before transaction commit failure occurs"
+
 
 # ===================================================================
 # Backend switch integration test
