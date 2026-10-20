@@ -60,7 +60,10 @@ def _require_text(
 def _require_score(value: Any, reason: str) -> float:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise _LegacyRgcInvalid(reason)
-    numeric = float(value)
+    try:
+        numeric = float(value)
+    except (OverflowError, ValueError) as exc:
+        raise _LegacyRgcInvalid(reason) from exc
     if not 0.0 <= numeric <= 1.0:
         raise _LegacyRgcInvalid(reason)
     return numeric
