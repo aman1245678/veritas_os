@@ -68,7 +68,13 @@ Case 5 also lacks provenance, but issuer recognition is the first tested
 boundary; Layer 2 must not be described as independently executed.
 Case 6 must not mark unevaluated freshness checks as PASS.
 
-## Current evidence gate — 2026-10-19
+## Historical evidence gate — 2026-10-19 (superseded by Oct19b)
+
+**Historical note only.** The Oct18b/Oct19 discrepancies below preceded the
+corrected Oct19b evidence package. The Oct19b local strict verification and
+Kiel's 2026-10-20 confirmation are described later in this document and in
+the [draft joint Boundary Verification Report](evolve-trustledger-m1-joint-boundary-verification-report-draft.md).
+Do not treat this historical section as the current evidence status.
 
 The received `VERITAS_M1_Final_Oct18b.zip` has passed independent package
 integrity checks in the review process, but **has not been frozen**.
@@ -77,14 +83,19 @@ The Oct19 revision still has outstanding evidence-record issues pending partner 
 1. Case 3 still contains mixed evaluation dates in the gate explanation and
    case metadata. The local `live_state.json` and other evidence timestamps
    must be reconciled to the final frozen case definition.
-2. Case 5 still reports positive freshness and context-binding booleans even though Layer 1 rejects the issuer.\n3. Case 6 correctly marks Layer 2 as NOT_REACHED, but its context-binding check is still reported as failed despite not being reached.
+2. Case 5 still reports positive freshness and context-binding booleans even though Layer 1 rejects the issuer.
+3. Case 6 correctly marks Layer 2 as NOT_REACHED, but its context-binding check is still reported as failed despite not being reached.
 
 The received Oct19 ZIP and its MANIFEST SHA-256 were independently matched against the sender's values; manifest-listed hashes and input fingerprints also match. That is **byte integrity**, not evidence-record consistency, issuer authenticity or freeze approval.
 
 Do not claim this harness passes the frozen six-case run before the revised
 ZIP is received, independently checked and explicitly frozen.
 
-## Next gate (separate PR / review)
+## Historical planned next gate (pre-Oct19b)
+
+The following was the plan before receipt of Oct19b; the actual local
+verification is recorded below. Formal evidence freeze and bilateral
+acceptance remain pending.
 
 After evidence freeze: pin the exact ZIP and MANIFEST SHA-256, verify all
 per-file raw hashes, reconcile Evolve's three-state records, run the harness
