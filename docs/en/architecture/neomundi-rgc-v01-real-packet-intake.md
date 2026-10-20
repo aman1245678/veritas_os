@@ -87,9 +87,10 @@ default. The runner never alters observation timestamps, fabricates
 an issuance or expiration time, or expands freshness limits to force
 a historical success.
 
+The historical v0.1 intake enforces a non-expandable freshness window
+of **1 to 3600 seconds** and a future-skew limit of **0 to 60 seconds**.
 The actual 19 October 2026 v0.1 observation is historical and
-**must fail** a current-governance 1-hour freshness check if consumed
-more than an hour later. A successfully validated offline signature
+**must fail** current-governance freshness checks after the one-hour limit. A successfully validated offline signature
 is not proof of currently usable or fresh evidence.
 
 ## Results
