@@ -1,15 +1,19 @@
 # Evolve TrustLedger × VERITAS OS
 # Milestone 1 — Joint Boundary Verification Report
 
-**Status:** DRAFT FOR BILATERAL REVIEW — NOT SIGNED OFF  
+**Status:** BILATERALLY ACCEPTED BY WRITTEN EMAIL — RESEARCH-ONLY M1 EVIDENCE BASELINE FROZEN  
 **Date prepared:** 2026-10-20  
 **Parties:** Evolve Edge AI (Kiel Green) and VERITAS OS (Takeshi Fujishita)  
-**Evidence candidate:** `VERITAS_M1_Final_Oct19b.zip`  
+**Frozen research evidence baseline:** `VERITAS_M1_Final_Oct19b.zip`  
 **Scope:** Research-only, offline, synthetic six-case boundary interoperability verification
 
-> This is a VERITAS-prepared proposed joint report, **not** a joint-approved
-> statement. Kiel's email confirmation is recorded below as correspondence,
-> not treated as signature, frozen-baseline approval, or production certification.
+> This is a VERITAS-prepared report **accepted bilaterally by explicit written
+> email statements on 2026-10-20**. The agreed substantive report version is
+> PR #2389 at commit `b8cae1ddc1243cf7f40821ea67210a3d438dfd3e`.
+> The email replies constitute the agreed acceptance record, **not** a
+> cryptographic signature or production certification. This administrative
+> revision records acceptance without changing the agreed evidence, test
+> outcomes, or research-only exclusions.
 
 ## 1. Purpose and boundary under test
 
@@ -105,9 +109,12 @@ In an email received on **2026-10-20**, Kiel Green reported:
    joint report.
 5. He expressed readiness to proceed with a joint Boundary Verification Report.
 
-These are **reported bilateral alignment points**, not a signed approval of
-this draft or an assertion that a production baseline has been frozen.
-Kiel has **not yet reviewed this report draft**.
+Kiel subsequently reviewed the complete PR #2389 draft, confirmed Sections
+2–6 without amendment, accepted the research-only evidence custody approach,
+and supplied an explicit written acceptance statement on 2026-10-20. Takeshi
+provided the matching written acceptance statement in reply on 2026-10-20.
+These emails record **bilateral research-only acceptance**, not a digital
+signature, third-party audit or frozen production baseline.
 
 ## 5. Explicit exclusions and non-claims
 
@@ -128,49 +135,60 @@ The test fixture issuer allowlist is not an operational trust store.
 Evolve's governance result remains evidence only; VERITAS independently
 controls execution authorization.
 
-## 6. Proposed Milestone 1 evidence baseline
+## 6. Frozen research-only Milestone 1 evidence baseline
 
-**Candidate:** the exact Oct19b ZIP and manifest hashes listed in §2.
+**Baseline:** the exact Oct19b ZIP and manifest hashes listed in §2.
 
-**Present status:** *proposed / ready for bilateral review*, **not frozen**.
+**Present status:** **FROZEN FOR THE AGREED RESEARCH-ONLY MILESTONE 1 SCOPE**
+by the two explicit acceptance statements dated 2026-10-20 (see §8).
+The accepted substantive report version is PR #2389 at commit
+`b8cae1ddc1243cf7f40821ea67210a3d438dfd3e`.
 
-To freeze the research evidence baseline, the parties should explicitly agree
-in writing to:
+The bilateral acceptance covers the exact ZIP and manifest digests, six-case
+outcome matrix, and the scope and exclusions in §5. Kiel agreed that the
+private local JSON report need not be publicly distributed; its digest in §2
+and retention on the VERITAS verifier's machine suffice for this research
+scope. This does not imply that the complete report is independently available
+to public readers.
 
-1. The exact ZIP and manifest digests and the six-case outcome matrix.
-2. The evidence custody/access method for the ZIP and detailed local report,
-   including how a reviewer can independently check the digests.
-3. The scope and exclusions in §5, including that this is a **research-only
-   synthetic** evidence baseline, not a production baseline.
-4. The version/date of the jointly reviewed report and the method of recording
-   each party's acceptance.
+Any later package change requires a new digest and fresh bilateral review.
+This **research evidence freeze** is not a frozen production baseline and is
+not permission for external execution.
 
-Any later package change requires a new digest and fresh review. No unilateral
-freeze or inferred sign-off is permitted.
+## 7. Bilateral review checklist — completed in the agreed scope
 
-## 7. Outstanding joint review items
+- [x] Kiel reviewed the report wording and six-case table without amendments.
+- [x] Takeshi confirmed the evidence references and research-only scope.
+- [x] Both parties accepted local retention of the private JSON report with
+      its SHA-256 recorded in §2, without public distribution.
+- [x] Both parties explicitly accepted the **research-only evidence baseline**
+      with the exact ZIP and manifest digests in §2.
+- [x] Both parties agreed to use explicit email replies referencing the report
+      version and digests as the §8 acceptance record.
 
-- [ ] Kiel reviews the wording and the six-case table in this exact draft.
-- [ ] Takeshi confirms the evidence references and the draft's scope.
-- [ ] Parties decide how to exchange or independently inspect the local JSON
-      report without placing partner material in a public repository.
-- [ ] Parties explicitly accept or amend the **research evidence baseline**
-      proposal, with exact hashes.
-- [ ] Parties agree on report version, any remaining qualifications, and
-      sign-off mechanism.
+**No remaining technical discrepancies were reported by Kiel.** The scope
+exclusions in §5 remain unchanged. The only administrative work remaining is
+to preserve the bilateral acceptance record and integrate this report into
+GitHub; neither action extends the technical proof.
 
-**No remaining technical discrepancy was reported by Kiel as of his email;
-the above items are document governance and acceptance steps, not assertions
-of new technical failures.**
+## 8. Bilateral acceptance record — research-only scope
 
-## 8. Acceptance record — intentionally unapproved
-
-| Party | Representative | Current state | Acceptance reference / date |
+| Party | Representative | State | Acceptance reference / date |
 | --- | --- | --- | --- |
-| VERITAS OS | Takeshi Fujishita | DRAFT PREPARED — acceptance pending | — |
-| Evolve Edge AI | Kiel Green | REVIEW REQUESTED — acceptance pending | — |
+| Evolve Edge AI | Kiel Green | **ACCEPTED** | Explicit acceptance statement in bilateral email thread, 2026-10-20 |
+| VERITAS OS | Takeshi Fujishita | **ACCEPTED** | Explicit reply in the same email thread, sent 2026-10-20 (confirmed by sender) |
 
-**Proposed Milestone 1 conclusion, conditional on both parties' acceptance:**
+Both acceptance statements reference the **2026-10-20 substantive report
+version in PR #2389**, the exact Oct19b ZIP SHA-256
+`8781bfc6d1518713291e1e262bc818d7855504aaea4f0280c625a51027a91787`
+and manifest SHA-256
+`319ca54e89d697ac7f5945333f7498f4e04c7fb8ee8ab6826c3ef7c3aba675f3`.
+Takeshi's reply additionally pins the reviewed report to commit
+`b8cae1ddc1243cf7f40821ea67210a3d438dfd3e`.
+These email records are retained in the private correspondence; they are not
+publicly included or represented as cryptographic signatures.
+
+**Milestone 1 accepted conclusion (research-only):**
 The Oct19b research-only synthetic six-case boundary results were independently
 evaluated by VERITAS and confirmed by Evolve as matching expected outcomes,
 with no observed ADOPT-to-execution-authority elevation. This conclusion is
@@ -184,5 +202,6 @@ limited to the defined fixtures and does not imply production assurance.
 - [Merged PR #2387](https://github.com/veritasfuji-japan/veritas_os/pull/2387)
 - Private Oct19b package and local JSON report: digests in §2; not publicly
   distributed or attached to this draft.
-- Kiel Green's email confirmation, 2026-10-20: retained in correspondence;
-  summarized in §4, not reproduced as a signature.
+- Kiel Green's email review and explicit acceptance, 2026-10-20, and Takeshi
+  Fujishita's acceptance reply, 2026-10-20: retained in private correspondence;
+  summarized in §§4, 7–8, not reproduced as cryptographic signatures.
