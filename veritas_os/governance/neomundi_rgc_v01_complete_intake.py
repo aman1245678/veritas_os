@@ -67,10 +67,10 @@ def verify_neomundi_v01_complete_packet(
         or current.utcoffset() is None
         or isinstance(max_age_seconds, bool)
         or not isinstance(max_age_seconds, int)
-        or max_age_seconds < 0
+        or not 1 <= max_age_seconds <= 3600
         or isinstance(max_future_skew_seconds, bool)
         or not isinstance(max_future_skew_seconds, int)
-        or max_future_skew_seconds < 0
+        or not 0 <= max_future_skew_seconds <= 60
         or not isinstance(accepted_measurement_version, str)
         or not accepted_measurement_version.strip()
     ):
