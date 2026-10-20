@@ -7,7 +7,9 @@ import argparse
 import hashlib
 import json
 import os
+import shutil
 import sys
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -60,6 +62,48 @@ def _write_json(path: Path, payload: dict[str, Any]) -> None:
         if tmp.exists():
             tmp.unlink()
 
+def _publish_outputs(
+    output_dir: Path, outputs: dict[str, dict[str, Any]]
+) -> None:
+    """Stage every report before atomically making the result directory visible.
+
+    This prevents normal write/rename failures from leaving an externally
+    visible success report without its complete evidence set. A consumed
+    replay marker is intentionally never reversed after a publication failure.
+    """
+    output_dir.parent.mkdir(parents=True, exist_ok=True)
+    if output_dir.exists() or output_dir.is_symlink():
+        raise ValueError("neomundi_v01_intake_output_dir_exists")
+    stage = Path(
+        tempfile.mkdtemp(
+            prefix=f".{output_dir.name}.pending-",
+            dir=output_dir.parent,
+        )
+    )
+    try:
+        for name, payload in outputs.items():
+            _write_json(stage / f"{name}.json", payload)
+        if output_dir.exists() or output_dir.is_symlink():
+            raise ValueError("neomundi_v01_intake_output_dir_exists")
+        # Stage and destination share the same parent / filesystem.
+        os.rename(stage, output_dir)
+    finally:
+        if stage.exists():
+            shutil.rmtree(stage)
+
+
+def _report_failed_intake(
+    output_dir: Path, report: dict[str, Any]
+) -> None:
+    """Best-effort atomic publication of a failure-only report."""
+    try:
+        _publish_outputs(output_dir, {"verification_report": report})
+    except (OSError, ValueError) as exc:
+        print(
+            f"NeoMundi v0.1 intake could not publish failure report: {exc}",
+            file=sys.stderr,
+        )
+
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
@@ -88,11 +132,12 @@ def _parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
-    # A failure must never leave previous successful proof files in the output.
+    # An output path must be new, never reused from a previous attempt.
+    # Do not consume the replay key if this precondition already fails.
     try:
-        if args.output_dir.exists() and any(args.output_dir.iterdir()):
-            raise ValueError("neomundi_v01_intake_output_dir_not_empty")
-        args.output_dir.mkdir(parents=True, exist_ok=True)
+        if args.output_dir.exists() or args.output_dir.is_symlink():
+            raise ValueError("neomundi_v01_intake_output_dir_exists")
+        args.output_dir.parent.mkdir(parents=True, exist_ok=True)
     except (OSError, ValueError) as exc:
         print(f"NeoMundi v0.1 intake output location rejected: {exc}", file=sys.stderr)
         return 2
@@ -118,7 +163,7 @@ def main(argv: list[str] | None = None) -> int:
             allow_no_expiry=args.allow_no_expiry,
         )
     except NeoMundiRealObservationPocError as exc:
-        _write_json(args.output_dir / "verification_report.json", exc.report)
+        _report_failed_intake(args.output_dir, exc.report)
         print(f"NeoMundi v0.1 intake rejected: {exc.reason}", file=sys.stderr)
         return 2
     except (OSError, ValueError) as exc:
@@ -133,16 +178,28 @@ def main(argv: list[str] | None = None) -> int:
                 "external_effect_performed": False,
             },
         }
-        _write_json(args.output_dir / "verification_report.json", report)
+        _report_failed_intake(args.output_dir, report)
         print(f"NeoMundi v0.1 intake failed: {exc}", file=sys.stderr)
         return 2
 
-    for name in (
-        "verification_report",
-        "verified_external_measurement_evidence",
-        "evidence_manifest",
-    ):
-        _write_json(args.output_dir / f"{name}.json", outputs[name])
+    try:
+        _publish_outputs(
+            args.output_dir,
+            {
+                "verification_report": outputs["verification_report"],
+                "verified_external_measurement_evidence": outputs[
+                    "verified_external_measurement_evidence"
+                ],
+                "evidence_manifest": outputs["evidence_manifest"],
+            },
+        )
+    except (OSError, ValueError) as exc:
+        print(
+            "NeoMundi v0.1 intake could not publish the complete evidence "
+            f"packet (replay state remains consumed): {exc}",
+            file=sys.stderr,
+        )
+        return 2
     print("NeoMundi RGC v0.1 COMPLETE-only packet verified as measurement evidence")
     return 0
 
