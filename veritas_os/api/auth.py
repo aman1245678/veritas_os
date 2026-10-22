@@ -208,6 +208,35 @@ class RedisAuthSecurityStore:
         return int(count) > limit
 
 
+def _validate_redis_auth_retention(client: Any) -> None:
+    """Read back the bounded strict Redis profile; never change server settings.
+
+    Configuration and current write health are not proof of retained-state
+    identity, persistent mounts, power-loss recovery or rollback resistance.
+    Inspection failures propagate so strict startup cannot silently proceed.
+    """
+    expected_settings = {
+        "appendonly": "yes",
+        "appendfsync": "always",
+        "no-appendfsync-on-rewrite": "no",
+        "maxmemory-policy": "noeviction",
+    }
+    for name, expected in expected_settings.items():
+        observed = client.config_get(name)
+        if not isinstance(observed, dict) or observed.get(name) != expected:
+            raise RuntimeError(
+                f"Redis auth retention requires {name}={expected}; "
+                "missing or unsupported configuration is refused."
+            )
+    persistence = client.info("persistence")
+    if (
+        not isinstance(persistence, dict)
+        or persistence.get("aof_enabled") != 1
+        or persistence.get("aof_last_write_status") != "ok"
+    ):
+        raise RuntimeError("Redis auth retention requires enabled, healthy AOF writes.")
+
+
 def _create_auth_security_store() -> AuthSecurityStore:
     """Create auth security store from environment configuration.
 
@@ -246,6 +275,10 @@ def _create_auth_security_store() -> AuthSecurityStore:
         redis_module = importlib.import_module("redis")
         client = redis_module.Redis.from_url(redis_url, decode_responses=True)
         client.ping()
+        from veritas_os.api.startup_health import should_fail_fast_startup
+
+        if should_fail_fast_startup():
+            _validate_redis_auth_retention(client)
         logger.info("Auth security store initialized in redis mode")
         return RedisAuthSecurityStore(client)
     except Exception as exc:
@@ -1200,8 +1233,14 @@ def _check_multiworker_auth_store() -> None:
     Local/development deployments retain the warning-only behavior. Worker
     counts come from the declared deployment environment; this does not detect
     replicas or worker counts supplied only as command-line arguments.
+    Strict Redis retention is inspected even when only one worker is declared.
     """
-    if isinstance(_get_effective_auth_store(), RedisAuthSecurityStore):
+    store = _get_effective_auth_store()
+    if isinstance(store, RedisAuthSecurityStore):
+        from veritas_os.api.startup_health import should_fail_fast_startup
+
+        if should_fail_fast_startup():
+            _validate_redis_auth_retention(store._redis)
         return
 
     web_concurrency = (os.getenv("WEB_CONCURRENCY") or "").strip()

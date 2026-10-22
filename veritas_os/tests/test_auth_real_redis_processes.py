@@ -23,7 +23,7 @@ import os
 import sys
 from veritas_os.api import auth, server
 
-os.environ["VERITAS_ENV"] = "production"
+os.environ["VERITAS_ENV"] = os.environ.pop("VERITAS_TEST_AUTH_PROFILE", "production")
 os.environ["WEB_CONCURRENCY"] = "2"
 # Even an explicit request for fail-open must not weaken production behavior.
 os.environ["VERITAS_AUTH_STORE_FAILURE_MODE"] = "open"
@@ -36,13 +36,20 @@ for line in sys.stdin:
         result = auth._auth_store_register_nonce(command["key"], ttl_sec=300)
     elif command["op"] == "rate":
         result = auth._auth_store_increment_rate_limit(command["key"], limit=2, window_sec=300)
-    elif command["op"] == "factory":
+    elif command["op"] in {"factory", "guard"}:
+        previous_profile = os.environ["VERITAS_ENV"]
+        os.environ["VERITAS_ENV"] = "production"
         try:
-            auth._create_auth_security_store()
+            if command["op"] == "factory":
+                auth._create_auth_security_store()
+            else:
+                auth._check_multiworker_auth_store()
         except RuntimeError:
             result = True
         else:
             result = False
+        finally:
+            os.environ["VERITAS_ENV"] = previous_profile
     else:
         raise ValueError("unsupported test command")
     print(json.dumps({"result": result}), flush=True)
@@ -71,7 +78,7 @@ class _Worker:
 
 
 @contextmanager
-def _worker(url: str):
+def _worker(url: str, profile: str = "production"):
     # Use an allowlisted child environment, not ambient credentials or posture.
     env = {
         "PATH": os.defpath,
@@ -80,6 +87,7 @@ def _worker(url: str):
         "VERITAS_ENV": "test",
         "VERITAS_AUTH_SECURITY_STORE": "redis",
         "VERITAS_AUTH_REDIS_URL": url,
+        "VERITAS_TEST_AUTH_PROFILE": profile,
         "OPENAI_API_KEY": "DUMMY_FOR_LOCAL_REDIS_TEST",
     }
     process = subprocess.Popen(
@@ -116,15 +124,19 @@ def real_redis(request):
             pytest.fail("real Redis tests require the redis Python client")
         pytest.skip("redis Python client unavailable")
 
-    appendonly = getattr(request, "param", "no")
+    profile = getattr(request, "param", "yes")
+    settings = {"appendonly": profile} if isinstance(profile, str) else profile
     # All storage belongs to this fixture, including the restart profiles.
     with tempfile.TemporaryDirectory(prefix="veritas-auth-redis-") as directory:
         socket_path = str(Path(directory) / "redis.sock")
         url = f"unix://{socket_path}?socket_timeout=1&socket_connect_timeout=1"
         process = subprocess.Popen(
             [binary, "--port", "0", "--unixsocket", socket_path,
-             "--unixsocketperm", "700", "--save", "", "--appendonly", appendonly,
-             "--appendfsync", "always", "--maxmemory-policy", "noeviction",
+             "--unixsocketperm", "700", "--save", "",
+             "--appendonly", settings.get("appendonly", "yes"),
+             "--appendfsync", settings.get("appendfsync", "always"),
+             "--maxmemory-policy", settings.get("maxmemory-policy", "noeviction"),
+             "--no-appendfsync-on-rewrite", settings.get("no-appendfsync-on-rewrite", "no"),
              "--dir", directory],
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
         )
@@ -249,7 +261,8 @@ def test_real_redis_restart_retention_depends_on_persistence(real_redis, stop):
     durable = client.config_get("appendonly")["appendonly"] == "yes"
     assert client.config_get("appendfsync")["appendfsync"] == "always"
     assert client.config_get("maxmemory-policy")["maxmemory-policy"] == "noeviction"
-    with _worker(url) as worker:
+    profile = "production" if durable else "local"
+    with _worker(url, profile=profile) as worker:
         assert worker.command("nonce", "before-redis-restart") is True
         assert worker.command("rate", "before-redis-restart") is False
         assert worker.command("rate", "before-redis-restart") is False
@@ -268,7 +281,19 @@ def test_real_redis_restart_retention_depends_on_persistence(real_redis, stop):
         else:
             # This is a demonstrated limitation, never a safe positive outcome.
             assert client.exists("veritas:nonce:before-redis-restart") == 0
-        with _worker(url) as replacement:
+        with _worker(url, profile=profile) as replacement:
             assert replacement.command("nonce", "before-redis-restart") is (not durable)
             assert replacement.command("rate", "before-redis-restart") is durable
             assert replacement.command("nonce", "fresh-after-redis-restart") is True
+
+
+@pytest.mark.parametrize("real_redis", [
+    {"appendonly": "no"}, {"appendfsync": "everysec"},
+    {"maxmemory-policy": "allkeys-lru"}, {"no-appendfsync-on-rewrite": "yes"},
+], indirect=True, ids=["volatile", "delayed-fsync", "evicting", "rewrite-skips-fsync"])
+def test_real_redis_unsafe_settings_refuse_strict_factory_and_guard(real_redis):
+    url, _, _ = real_redis
+    # Local setup is explicit; each command then invokes the actual strict path.
+    with _worker(url, profile="local") as worker:
+        assert worker.command("factory") is True
+        assert worker.command("guard") is True

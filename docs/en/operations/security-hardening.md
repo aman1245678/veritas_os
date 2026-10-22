@@ -62,7 +62,11 @@ anti-rollback behavior or shared configuration across replicas.
 
 Review the [authentication Redis restart boundary](../security/auth-redis-restart-boundary.md)
 before relying on nonce retention after Redis restart. Connectivity checks do
-not establish retained-state identity or persistence configuration.
+not establish retained-state identity. Strict Redis startup additionally reads
+back AOF/fsync/noeviction settings and current AOF write health; missing,
+unsupported or unreadable settings refuse startup. Provision the documented
+read-only inspection ACLs and storage separately; VERITAS does not configure
+Redis or prove persistent mounts, rollback resistance or later config stability.
 
 ---
 

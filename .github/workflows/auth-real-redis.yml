@@ -52,7 +52,7 @@ jobs:
 
           root = ET.parse("test-reports/auth-real-redis.xml").getroot()
           cases = list(root.iter("testcase"))
-          assert len(cases) == 8
+          assert len(cases) == 12
           assert not any(list(case) for case in cases), "failure/error/skip or unexpected case output"
           sha = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
           assert sha == os.environ["EXPECTED_SHA"]
@@ -66,6 +66,8 @@ jobs:
               "redis_process_restart_profiles_tested": ["no persistence", "AOF appendfsync always"],
               "volatile_restart_replay_prevented": False,
               "aof_process_restart_retention_tested": True,
+              "unsafe_redis_configuration_startup_refused": True,
+              "runtime_configuration_drift_protection_proven": False,
               "power_loss_or_rollback_resistance_proven": False,
               "production_bypass_resistance_proven": False,
           }
