@@ -52,7 +52,7 @@ jobs:
 
           root = ET.parse("test-reports/auth-real-redis.xml").getroot()
           cases = list(root.iter("testcase"))
-          assert len(cases) == 12
+          assert len(cases) == 14
           assert not any(list(case) for case in cases), "failure/error/skip or unexpected case output"
           sha = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
           assert sha == os.environ["EXPECTED_SHA"]
@@ -61,7 +61,8 @@ jobs:
               "tests": len(cases),
               "redis_server": subprocess.check_output(["redis-server", "--version"], text=True).strip(),
               "redis_client": redis.__version__,
-              "scope": "local Unix socket; separate processes; synthetic nonce/rate state",
+              "scope": "local Unix socket; separate processes; ASGI HTTP authentication with stubbed replay callback",
+              "http_hmac_nonce_window_tested": True,
               "http_effect_proven": False,
               "redis_process_restart_profiles_tested": ["no persistence", "AOF appendfsync always"],
               "volatile_restart_replay_prevented": False,
