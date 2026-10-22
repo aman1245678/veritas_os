@@ -1,4 +1,4 @@
-"""Real Redis/process tests; no HTTP, Provider, or durable Redis restart claim."""
+"""Bounded Redis process/restart tests; no HTTP, power-loss or rollback proof."""
 
 from __future__ import annotations
 
@@ -102,7 +102,7 @@ def _worker(url: str):
 
 
 @pytest.fixture
-def real_redis():
+def real_redis(request):
     required = os.getenv("VERITAS_REQUIRE_REAL_REDIS_TESTS") == "1"
     binary = os.getenv("VERITAS_TEST_REDIS_SERVER") or shutil.which("redis-server")
     if not binary:
@@ -116,13 +116,15 @@ def real_redis():
             pytest.fail("real Redis tests require the redis Python client")
         pytest.skip("redis Python client unavailable")
 
-    # Short private Unix-socket path, with no TCP listener or persistent data.
+    appendonly = getattr(request, "param", "no")
+    # All storage belongs to this fixture, including the restart profiles.
     with tempfile.TemporaryDirectory(prefix="veritas-auth-redis-") as directory:
         socket_path = str(Path(directory) / "redis.sock")
         url = f"unix://{socket_path}?socket_timeout=1&socket_connect_timeout=1"
         process = subprocess.Popen(
             [binary, "--port", "0", "--unixsocket", socket_path,
-             "--unixsocketperm", "700", "--save", "", "--appendonly", "no",
+             "--unixsocketperm", "700", "--save", "", "--appendonly", appendonly,
+             "--appendfsync", "always", "--maxmemory-policy", "noeviction",
              "--dir", directory],
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
         )
@@ -200,3 +202,73 @@ def test_real_redis_outage_refuses_nonce_rate_and_factory(real_redis):
         assert worker.command("nonce", "fresh-during-outage") is False
         assert worker.command("rate", "fresh-during-outage") is True
         assert worker.command("factory") is True
+
+
+@contextmanager
+def _restarted_redis(original: subprocess.Popen, client):
+    """Reopen exactly the original fixture directory and server settings."""
+    import redis
+
+    assert original.poll() is not None
+    process = subprocess.Popen(
+        original.args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+    )
+    try:
+        # Discard the admin client's old connection before observing the new PID.
+        client.connection_pool.disconnect()
+        deadline = time.monotonic() + 10
+        while True:
+            assert process.poll() is None, (
+                "restarted Redis exited before readiness: " + process.stdout.read()
+            )
+            try:
+                if client.ping():
+                    break
+            except redis.RedisError:
+                if time.monotonic() >= deadline:
+                    pytest.fail("restarted Redis readiness timed out")
+                time.sleep(0.02)
+        yield process
+    finally:
+        if process.poll() is None:
+            process.terminate()
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=5)
+        process.stdout.close()
+
+
+@pytest.mark.parametrize("real_redis", ["no", "yes"], indirect=True,
+                         ids=["no-persistence-reaccepts", "aof-always-refuses"])
+@pytest.mark.parametrize("stop", ["terminate", "kill"])
+def test_real_redis_restart_retention_depends_on_persistence(real_redis, stop):
+    """Expose volatile-store replay and verify bounded AOF process recovery."""
+    url, original, client = real_redis
+    durable = client.config_get("appendonly")["appendonly"] == "yes"
+    assert client.config_get("appendfsync")["appendfsync"] == "always"
+    assert client.config_get("maxmemory-policy")["maxmemory-policy"] == "noeviction"
+    with _worker(url) as worker:
+        assert worker.command("nonce", "before-redis-restart") is True
+        assert worker.command("rate", "before-redis-restart") is False
+        assert worker.command("rate", "before-redis-restart") is False
+    ttl_before = client.pttl("veritas:nonce:before-redis-restart")
+    assert ttl_before > 0
+    if durable:
+        assert client.info("persistence")["aof_last_write_status"] == "ok"
+    getattr(original, stop)()
+    original.wait(timeout=5)
+
+    with _restarted_redis(original, client) as restarted:
+        assert restarted.pid != original.pid
+        if durable:
+            assert client.get("veritas:nonce:before-redis-restart") == b"1"
+            assert 0 < client.pttl("veritas:nonce:before-redis-restart") <= ttl_before
+        else:
+            # This is a demonstrated limitation, never a safe positive outcome.
+            assert client.exists("veritas:nonce:before-redis-restart") == 0
+        with _worker(url) as replacement:
+            assert replacement.command("nonce", "before-redis-restart") is (not durable)
+            assert replacement.command("rate", "before-redis-restart") is durable
+            assert replacement.command("nonce", "fresh-after-redis-restart") is True
