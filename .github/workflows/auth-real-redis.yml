@@ -52,7 +52,7 @@ jobs:
 
           root = ET.parse("test-reports/auth-real-redis.xml").getroot()
           cases = list(root.iter("testcase"))
-          assert len(cases) == 4
+          assert len(cases) == 8
           assert not any(list(case) for case in cases), "failure/error/skip or unexpected case output"
           sha = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
           assert sha == os.environ["EXPECTED_SHA"]
@@ -63,7 +63,10 @@ jobs:
               "redis_client": redis.__version__,
               "scope": "local Unix socket; separate processes; synthetic nonce/rate state",
               "http_effect_proven": False,
-              "redis_restart_durability_proven": False,
+              "redis_process_restart_profiles_tested": ["no persistence", "AOF appendfsync always"],
+              "volatile_restart_replay_prevented": False,
+              "aof_process_restart_retention_tested": True,
+              "power_loss_or_rollback_resistance_proven": False,
               "production_bypass_resistance_proven": False,
           }
           Path("test-reports/auth-real-redis-identity.json").write_text(json.dumps(report, indent=2) + "\n")
