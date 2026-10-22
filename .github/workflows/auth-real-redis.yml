@@ -1,0 +1,77 @@
+name: Auth Real Redis Processes
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: auth-real-redis-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  auth-real-redis:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      VERITAS_REQUIRE_REAL_REDIS_TESTS: "1"
+      OPENAI_API_KEY: "DUMMY_FOR_CI"
+      PYTHONUNBUFFERED: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - name: Install isolated-test dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends redis-server
+          python -m pip install ".[dev,signing]" "redis==5.2.1"
+      - name: Run real Redis process tests
+        run: |
+          mkdir -p test-reports
+          python -m pytest -q veritas_os/tests/test_auth_real_redis_processes.py --junitxml=test-reports/auth-real-redis.xml
+      - name: Validate complete results and record tested identity
+        env:
+          EXPECTED_SHA: ${{ github.sha }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          import subprocess
+          import xml.etree.ElementTree as ET
+          import redis
+
+          root = ET.parse("test-reports/auth-real-redis.xml").getroot()
+          cases = list(root.iter("testcase"))
+          assert len(cases) == 4
+          assert not any(list(case) for case in cases), "failure/error/skip or unexpected case output"
+          sha = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+          assert sha == os.environ["EXPECTED_SHA"]
+          report = {
+              "tested_sha": sha,
+              "tests": len(cases),
+              "redis_server": subprocess.check_output(["redis-server", "--version"], text=True).strip(),
+              "redis_client": redis.__version__,
+              "scope": "local Unix socket; separate processes; synthetic nonce/rate state",
+              "http_effect_proven": False,
+              "redis_restart_durability_proven": False,
+              "production_bypass_resistance_proven": False,
+          }
+          Path("test-reports/auth-real-redis-identity.json").write_text(json.dumps(report, indent=2) + "\n")
+          PY
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: auth-real-redis-processes
+          path: test-reports/
+          if-no-files-found: error
