@@ -813,6 +813,94 @@ class TestPostgresMemoryStoreFailure:
 
         assert executed is True, "SQL execute must complete before transaction commit failure occurs"
 
+    def test_put_cancellation_during_sql_execution(self) -> None:
+        """Cancellation while awaiting execute() triggers proper context cleanup.
+
+        Verifies that:
+        1. pool.connection() and conn.transaction() context managers exit in strict order
+           (transaction exits before connection).
+        2. Both context managers receive asyncio.CancelledError and do not suppress it.
+        3. execute() is called and awaited exactly once with no retries.
+        4. Bounded timeouts prevent hangs and a finally block ensures task cleanup on failure.
+        """
+        from unittest.mock import AsyncMock, MagicMock
+        from veritas_os.storage.postgresql import PostgresMemoryStore
+
+        store = PostgresMemoryStore()
+        execute_started = asyncio.Event()
+        hold_execution = asyncio.Event()
+        cleanup_events = []
+
+        async def fake_execute(*args, **kwargs):
+            execute_started.set()
+            await hold_execution.wait()
+
+        mock_execute = AsyncMock(side_effect=fake_execute)
+
+        class MockTransactionContext:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc_val, exc_tb):
+                cleanup_events.append(("transaction_exit", exc_type))
+                return False
+
+        mock_conn = MagicMock()
+        mock_conn.execute = mock_execute
+        mock_conn.transaction.return_value = MockTransactionContext()
+
+        class MockConnectionContext:
+            async def __aenter__(self):
+                return mock_conn
+
+            async def __aexit__(self, exc_type, exc_val, exc_tb):
+                cleanup_events.append(("connection_exit", exc_type))
+                return False
+
+        class MockPool:
+            def connection(self):
+                return MockConnectionContext()
+
+        async def _get_pool():
+            return MockPool()
+
+        store._get_pool = _get_pool  # type: ignore[assignment]
+
+        async def _run_test():
+            put_task = asyncio.create_task(
+                store.put("cancel_key", {"data": "test"}, user_id="test_user")
+            )
+
+            try:
+                # Bounded timeout so regressions produce a failure instead of hanging
+                await asyncio.wait_for(execute_started.wait(), timeout=2.0)
+
+                # Cancel the task while it is awaiting inside execute()
+                put_task.cancel()
+
+                # Verify awaiting the task raises asyncio.CancelledError
+                with pytest.raises(asyncio.CancelledError):
+                    await put_task
+            finally:
+                # Cancel and await any unfinished task if the test fails early
+                if not put_task.done():
+                    put_task.cancel()
+                    try:
+                        await put_task
+                    except (asyncio.CancelledError, Exception):
+                        pass
+
+        asyncio.run(_run_test())
+
+        # Assert execute was called once and awaited once
+        mock_execute.assert_called_once()
+        mock_execute.assert_awaited_once()
+
+        # Assert strict context manager cleanup order and cancellation propagation
+        assert len(cleanup_events) == 2, f"Expected 2 cleanup events, got {cleanup_events}"
+        assert cleanup_events[0] == ("transaction_exit", asyncio.CancelledError)
+        assert cleanup_events[1] == ("connection_exit", asyncio.CancelledError)
+
 
 # ===================================================================
 # Backend switch integration test
