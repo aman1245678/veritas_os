@@ -323,7 +323,8 @@ def test_real_redis_http_nonce_covers_signature_window(real_redis, monkeypatch, 
     monkeypatch.setattr(server, "_AUTH_SECURITY_STORE", auth.RedisAuthSecurityStore(redis_client))
     monkeypatch.setattr(auth.time, "time", lambda: float(now))
 
-    async def run_replay(decision_id):
+    async def run_replay(decision_id, *, strict):
+        assert strict is True
         calls.append(decision_id)
         return SimpleNamespace(
             decision_id=decision_id, replay_path="fixture", match=True,

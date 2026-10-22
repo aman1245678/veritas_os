@@ -34,7 +34,8 @@ def replay_http(monkeypatch):
     monkeypatch.setattr(rate_limiting, "_rate_bucket", {})
     monkeypatch.setattr(server, "_AUTH_SECURITY_STORE", auth.InMemoryAuthSecurityStore())
 
-    async def run_replay(decision_id):
+    async def run_replay(decision_id, *, strict):
+        assert strict is True
         calls.append(decision_id)
         return SimpleNamespace(
             decision_id=decision_id, replay_path="fixture", match=True,

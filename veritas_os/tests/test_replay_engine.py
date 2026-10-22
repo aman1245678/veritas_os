@@ -71,6 +71,8 @@ async def test_run_replay_strict_mode_skips_tools_and_matches(monkeypatch, tmp_p
         captured["temperature"] = body.get("temperature")
         captured["seed"] = body.get("seed")
         captured["mock_external"] = body.get("context", {}).get("_mock_external_apis")
+        captured["request_mock_external"] = _request._veritas_mock_external_apis
+        captured["memory_store_getter"] = _kw.get("memory_store_getter")
         return {
             "decision": {"output": "allow", "answer": "ok"},
             "fuji": {"result": "allow", "status": "allow"},
@@ -90,6 +92,8 @@ async def test_run_replay_strict_mode_skips_tools_and_matches(monkeypatch, tmp_p
     assert captured["seed"] == 42
     assert captured["request_id"] != "dec-100"
     assert captured["mock_external"] is True
+    assert captured["request_mock_external"] is True
+    assert captured["memory_store_getter"]() is None
     reports = list(tmp_path.glob("replay_dec-100_*.json"))
     assert len(reports) == 1
 
