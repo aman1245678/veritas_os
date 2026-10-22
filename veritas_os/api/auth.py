@@ -88,7 +88,7 @@ class AuthSecurityStore(Protocol):
     """Shared store interface for auth security controls."""
 
     def register_nonce(self, nonce: str, ttl_sec: float) -> bool:
-        """Return True when nonce is newly registered, False on replay."""
+        """Return True on registration, False on replay or refused admission."""
 
     def increment_auth_failure(
         self,
@@ -111,15 +111,19 @@ class InMemoryAuthSecurityStore:
     """Thread-safe in-memory implementation for auth security controls."""
 
     def register_nonce(self, nonce: str, ttl_sec: float) -> bool:
+        """Reject replay or full capacity without evicting unexpired nonces."""
         # Import here to avoid circular dependency - these are managed in rate_limiting
         from veritas_os.api.rate_limiting import (
             _nonce_lock,
             _nonce_store,
             _cleanup_nonces_unsafe,
+            _effective_nonce_max,
         )
         with _nonce_lock:
             _cleanup_nonces_unsafe()
             if nonce in _nonce_store:
+                return False
+            if len(_nonce_store) >= _effective_nonce_max():
                 return False
             _nonce_store[nonce] = time.time() + ttl_sec
             return True
