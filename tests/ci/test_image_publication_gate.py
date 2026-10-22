@@ -24,8 +24,8 @@ log = pathlib.Path(os.environ["CALL_LOG"])
 with log.open("a") as f:
     f.write(json.dumps([pathlib.Path(sys.argv[0]).name, *args]) + "\n")
 if pathlib.Path(sys.argv[0]).name == "trivy":
-    if os.environ.get("MUTATE_ARCHIVE") == "1":
-        pathlib.Path(args[args.index("--input") + 1]).write_bytes(b"changed")
+    if os.environ.get("MUTATE_LAYOUT") == "1":
+        (pathlib.Path(args[args.index("--input") + 1]) / "blob").write_bytes(b"changed")
     sys.exit(int(os.environ.get("SCAN_EXIT", "0")))
 if args[0] == "inspect":
     sys.stdout.write('{"schemaVersion":2}')
@@ -47,12 +47,15 @@ def run_gate(tmp_path, **settings):
         path = tools / name
         path.write_text(f"#!{sys.executable}\n" + STUB)
         path.chmod(0o755)
-    archive = tmp_path / "image.tar"
-    archive.write_bytes(b"synthetic archive")
+    layout = tmp_path / "image"
+    layout.mkdir()
+    (layout / "blob").write_bytes(b"synthetic layout")
+    if settings.get("SYMLINK_LAYOUT") == "1":
+        (layout / "link").symlink_to(tmp_path / "outside")
     log = tmp_path / "calls.jsonl"
     env = {**os.environ, "PATH": f"{tools}:{os.defpath}", "CALL_LOG": str(log), **settings}
     result = subprocess.run(
-        ["bash", str(SCRIPT), str(archive), str(tmp_path / "reports"),
+        ["bash", str(SCRIPT), str(layout), str(tmp_path / "reports"),
          "docker://synthetic.example/image:sha", "docker://synthetic.example/image:latest"],
         env=env, capture_output=True, text=True, check=False,
     )
@@ -69,7 +72,7 @@ def test_vulnerability_or_scanner_error_never_copies(tmp_path, exit_code):
     assert copies == []
 
 
-def test_success_copies_exact_scanned_archive_with_attestations(tmp_path):
+def test_success_copies_exact_scanned_layout_with_attestations(tmp_path):
     result, calls, copies = run_gate(tmp_path)
     assert result.returncode == 0, result.stderr
     assert len(copies) == 2
@@ -79,14 +82,14 @@ def test_success_copies_exact_scanned_archive_with_attestations(tmp_path):
     source = scanner[scanner.index("--input") + 1]
     for copy in copies:
         assert "--all" in copy and "--preserve-digests" in copy
-        assert copy[-2] == f"oci-archive:{source}"
+        assert copy[-2] == f"oci:{source}"
         assert calls.index(copy) > calls.index(scanner)
     assert copies[0][-1].endswith(":sha")
     assert copies[1][-1].endswith(":latest")
 
 
-def test_archive_mutation_after_scan_never_copies(tmp_path):
-    result, _, copies = run_gate(tmp_path, MUTATE_ARCHIVE="1")
+def test_layout_mutation_after_scan_never_copies(tmp_path):
+    result, _, copies = run_gate(tmp_path, MUTATE_LAYOUT="1")
     assert result.returncode != 0
     assert copies == []
 
@@ -120,8 +123,17 @@ def test_workflows_keep_unpublished_build_and_pr_without_write_permissions():
         assert config["provenance"] is True and config["sbom"] is True
         assert config["platforms"] == "linux/amd64"
         assert config["outputs"].startswith("type=oci,")
+        assert config["outputs"].endswith(",tar=false")
         assert any("bash scripts/ci/publish_scanned_oci.sh" in s.get("run", "") for s in steps)
         assert not any(s.get("continue-on-error") for s in steps)
     pr_text = (ROOT / ".github/workflows/image-publication-pr.yml").read_text()
     assert "docker/login-action" not in pr_text
     assert "docker://" not in pr_text
+
+
+def test_layout_symlink_never_scans_or_copies(tmp_path):
+    result, calls, copies = run_gate(tmp_path, SYMLINK_LAYOUT="1")
+    assert result.returncode != 0
+    assert "symlinks" in result.stderr
+    assert not any(call[0] == "trivy" for call in calls)
+    assert copies == []

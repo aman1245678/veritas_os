@@ -23,13 +23,13 @@ jobs:
         run: |
           python -m pip install pytest PyYAML
           python -m pytest -q tests/ci/test_image_publication_gate.py
-      - name: Build unpublished OCI archive with attestations
+      - name: Build unpublished OCI layout with attestations
         uses: docker/build-push-action@v6
         with:
           context: .
           platforms: linux/amd64
           push: false
-          outputs: type=oci,dest=${{ runner.temp }}/veritas-image.tar
+          outputs: type=oci,dest=${{ runner.temp }}/veritas-image,tar=false
           provenance: true
           sbom: true
       - name: Install OCI copy tool
@@ -39,7 +39,7 @@ jobs:
       - name: Install scanner and record advisory report
         uses: aquasecurity/trivy-action@0.35.0
         with:
-          input: ${{ runner.temp }}/veritas-image.tar
+          input: ${{ runner.temp }}/veritas-image
           format: sarif
           output: trivy-results.sarif
           scanners: vuln
@@ -54,7 +54,7 @@ jobs:
           mkdir -p test-reports
           printf '%s\n' "$TESTED_SHA" > test-reports/tested-sha.txt
           bash scripts/ci/publish_scanned_oci.sh \
-            "$RUNNER_TEMP/veritas-image.tar" test-reports \
+            "$RUNNER_TEMP/veritas-image" test-reports \
             "oci:$RUNNER_TEMP/verified-image:pr"
           skopeo inspect --raw "oci:$RUNNER_TEMP/verified-image:pr" \
             > test-reports/copied-manifest.json
