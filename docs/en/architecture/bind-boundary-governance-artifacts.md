@@ -66,6 +66,22 @@ adjudication with isolated configuration and audit storage. They establish this
 management-route policy boundary, not external-operation or customer-deployment
 coverage.
 
+## Policy promotion approval metadata
+
+`POST /v1/governance/policy-bundles/promote` rejects the reserved
+`bind_adjudication` key in client-supplied `approval_context` with HTTP 400
+(`approval_context_policy_override_forbidden`) before invoking promotion.
+Bind policy controls come from the current server governance policy.
+
+The internal Bind engine accepts policy overrides from trusted callers. Passing
+HTTP approval metadata directly to that mechanism previously let a promotion
+request disable TTL or approval-freshness requirements. The regression tests
+exercise the real HTTP route, helper, adapter and Bind evaluation using temporary
+bundle files and an active pointer, with audit storage isolated. A control
+request remains BLOCKED/ESCALATED under the configured missing-evidence policy;
+an override request is rejected without changing the pointer. These fixtures do
+not establish cryptographic bundle authenticity or production deployment safety.
+
 ## TrustLog and lineage integration
 
 - `ExecutionIntent` appends as `kind=governance.execution_intent` via the

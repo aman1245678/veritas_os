@@ -859,6 +859,13 @@ def governance_promote_policy_bundle(
     x_role: Optional[str] = Header(default=None, alias="X-Role"),
 ):
     """Promote policy bundle pointer via existing bind-boundary adapter path."""
+    # Approval metadata supplied over HTTP cannot configure Bind policy.
+    # Bind core supports trusted internal overrides through this reserved key.
+    if "bind_adjudication" in (body.approval_context or {}):
+        return JSONResponse(
+            status_code=400,
+            content={"ok": False, "error": "approval_context_policy_override_forbidden"},
+        )
     bundle_name = (body.bundle_id or body.bundle_dir_name or "").strip()
     actor_identity = (x_role or "").strip() or "governance_api"
     try:
