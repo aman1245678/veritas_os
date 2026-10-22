@@ -878,9 +878,9 @@ class TestPostgresMemoryStoreFailure:
                 # Cancel the task while it is awaiting inside execute()
                 put_task.cancel()
 
-                # Bounded wait for cancelled task to ensure test fails clearly if cancellation is suppressed
+                # Bounded wait for cancelled task with shield so timeout propagates directly without waiting on task cancellation
                 with pytest.raises(asyncio.CancelledError):
-                    await asyncio.wait_for(put_task, timeout=2.0)
+                    await asyncio.wait_for(asyncio.shield(put_task), timeout=2.0)
             finally:
                 # Release hold_execution so execute() does not block indefinitely
                 hold_execution.set()
