@@ -1195,21 +1195,37 @@ async def verify_signature(
 
 
 def _check_multiworker_auth_store() -> None:
-    """Warn when in-memory auth store is used in a multi-worker environment."""
+    """Reject non-shared multi-worker auth stores in strict deployments.
+
+    Local/development deployments retain the warning-only behavior. Worker
+    counts come from the declared deployment environment; this does not detect
+    replicas or worker counts supplied only as command-line arguments.
+    """
     if isinstance(_get_effective_auth_store(), RedisAuthSecurityStore):
         return
 
     web_concurrency = (os.getenv("WEB_CONCURRENCY") or "").strip()
     uvicorn_workers = (os.getenv("UVICORN_WORKERS") or "").strip()
 
-    try:
-        multi_worker = (int(web_concurrency) > 1 if web_concurrency else False) or (
-            int(uvicorn_workers) > 1 if uvicorn_workers else False
-        )
-    except ValueError:
-        multi_worker = False
+    multi_worker = False
+    for worker_count in (web_concurrency, uvicorn_workers):
+        try:
+            multi_worker = multi_worker or int(worker_count) > 1
+        except ValueError:
+            # An invalid value must not hide the other declared worker count.
+            continue
 
     if multi_worker:
+        from veritas_os.api.startup_health import should_fail_fast_startup
+
+        if should_fail_fast_startup():
+            raise RuntimeError(
+                "Multi-worker authentication requires a shared Redis auth store "
+                "in production/strict deployments. Rate limiting and nonce "
+                "replay protection are not shared by the in-memory store. "
+                "Set VERITAS_AUTH_SECURITY_STORE=redis and "
+                "VERITAS_AUTH_REDIS_URL before startup."
+            )
         logger.warning(
             "[SECURITY] In-memory auth store is active with multi-worker deployment "
             "(WEB_CONCURRENCY=%s, UVICORN_WORKERS=%s). "

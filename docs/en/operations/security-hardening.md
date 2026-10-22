@@ -52,6 +52,14 @@ This document provides a comprehensive security checklist for hardening Veritas 
 | Restrict CORS origins | Set `VERITAS_CORS_ALLOW_ORIGINS` to specific trusted origins. Never include `*`. | HIGH |
 | Configure trusted proxies | Set `VERITAS_TRUSTED_PROXIES` to your reverse proxy IPs only. | MEDIUM |
 
+In production/strict profiles, startup rejects a non-shared auth store when
+`WEB_CONCURRENCY` or `UVICORN_WORKERS` declares more than one worker.
+Local/development profiles log a warning. Declare worker counts in these
+environment variables: the check does not discover replicas or counts passed
+only via a server command-line option. Redis selection still requires a valid,
+reachable configured backend; the guard does not establish Redis durability,
+anti-rollback behavior or shared configuration across replicas.
+
 ---
 
 ## 5. Network & Transport
