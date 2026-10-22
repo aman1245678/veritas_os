@@ -1,0 +1,78 @@
+# API authentication and HMAC replay boundary
+
+Source baseline: `3fc36cfb7e240424871f280c93bef9f1f127b8a1` (after #2397).
+This is a scoped source/ASGI authentication review, not production validation or
+a complete vulnerability assessment.
+
+## Mounted application boundaries
+
+`server.py` mounts the following routers. Permissions are enforced by individual
+route dependencies; successful API-key validation alone does not confer every
+permission. Read the current route modules for exact paths.
+
+| Router / path family | Router authentication | Route authorization / replay protection |
+| --- | --- | --- |
+| Public system: root, health, status aliases | Public | No HMAC |
+| Decide: `/v1/decide`, `/v1/fuji/validate` | API key + rate limit | `decide`; no HMAC dependency |
+| `/v1/replay/{decision_id}` | API key + rate limit | Handler manually invokes HMAC verification; no separate RBAC permission dependency |
+| `/v1/decision/replay/{decision_id}` | API key + rate limit | `trust_log_read`; forces mocked external APIs; no HMAC dependency |
+| Memory: put / erase | API key + rate limit | `memory_write`; tenant identity derived from API key; no HMAC |
+| Memory: get / search | API key + rate limit | `memory_read`; tenant identity derived from API key; no HMAC |
+| Trust read / verification / export | API key + rate limit | `trust_log_read`; no HMAC |
+| Trust feedback | API key + rate limit | `trust_feedback_write`; no HMAC |
+| WAT shadow issue / validation / revocation | API key + rate limit | `decide`; no HMAC |
+| WAT event / timeline reads | API key + rate limit | `trust_log_read`; no HMAC |
+| Governance reads / writes | API key + governance access check | `governance_read` / `governance_write`; no HMAC |
+| System metrics / compliance reads | API key | `compliance_read`; no HMAC |
+| System reports | API key | `governance_read`; no HMAC |
+| System configuration / halt controls | API key | `config_write`; no HMAC |
+| Observability | API key | `governance_read`; no HMAC |
+| SSE `/v1/events` | Header-first API key; query credential opt-in only | No HMAC or route-specific RBAC permission |
+| WebSocket `/v1/ws/trustlog` | Explicit WebSocket API-key authentication in handler | No HMAC or route-specific RBAC permission |
+
+HMAC is not a global middleware. An imported `verify_signature` symbol alone
+would not establish enforcement; the legacy replay handler explicitly calls it.
+Absence of HMAC on other routes is not itself evidence of an authentication
+bypass. Bind single-use execution authorization remains a separate boundary.
+
+The two replay handlers use different engines and contracts. This review does
+not establish that the legacy engine always suppresses external calls: its
+`strict` behavior is selected from deployment configuration/posture. Replay
+execution safety and stream authorization remain separate review surfaces.
+
+## Nonce expiry defect and correction
+
+The verifier accepts `abs(int(now) - signed_timestamp) <= 300`. Previously it
+retained an admitted nonce for only 300 seconds from admission. A timestamp
+accepted up to 300 seconds ahead therefore outlived the nonce record. Even a
+current timestamp had a fractional-second gap at the inclusive final second.
+The same signed HTTP request could reach the replay callback twice.
+
+The verifier now retains a nonce for at least 300 seconds and until
+`signed_timestamp + 300 + 1`, whichever is later. The extra second covers integer
+timestamp truncation. Redis nonce TTL conversion rounds up to milliseconds.
+Future-dated requests can occupy nonce capacity for about 601 seconds. Capacity
+exhaustion continues to refuse new admissions; unexpired records are not evicted.
+The signed payload format and accepted timestamp skew remain unchanged.
+Existing nonce records are not extended retroactively. Mixed-version workers
+still admit requests through the old behavior; deploy consistently and allow
+the previous signature acceptance horizon to pass before relying on the fix.
+
+## Bounded verification
+
+`test_replay_http_nonce_window.py` sends in-process ASGI HTTP requests to the
+mounted production application. API-key validation, rate limiting, HMAC and the
+in-memory nonce implementation run normally; only the replay business callback
+is stubbed. A controlled clock covers current/future timestamps, immediate and
+end-of-window replays, fresh requests, invalid keys/signatures/timestamps and
+synthetic store failures. The regression failed before the correction.
+
+The dedicated real Redis workflow also exercises that mounted HTTP route with
+actual Redis storage. It verifies current/future timestamp retention using PTTL
+and rejects immediate replay. This measures TTL rather than waiting ten minutes.
+It uses a stubbed replay callback and proves no external business effect.
+
+These tests do not prove production transport security, clock rollback
+resistance, deployment configuration, authorization for every business object,
+or Redis rollback resistance. Existing process/restart tests and the
+[Redis restart boundary](auth-redis-restart-boundary.md) retain their own scope.

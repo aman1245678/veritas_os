@@ -60,6 +60,9 @@ only via a server command-line option. Redis selection still requires a valid,
 reachable configured backend; the guard does not establish Redis durability,
 anti-rollback behavior or shared configuration across replicas.
 
+Review the [API authentication and HMAC replay boundary](../security/api-authentication-replay-boundary.md)
+for route coverage and nonce lifetime requirements.
+
 Review the [authentication Redis restart boundary](../security/auth-redis-restart-boundary.md)
 before relying on nonce retention after Redis restart. Connectivity checks do
 not establish retained-state identity. Strict Redis startup additionally reads

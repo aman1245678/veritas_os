@@ -6,6 +6,7 @@ import hashlib
 import hmac
 import importlib
 import logging
+import math
 import os
 import secrets
 import threading
@@ -177,7 +178,7 @@ class RedisAuthSecurityStore:
         self._redis = redis_client
 
     def register_nonce(self, nonce: str, ttl_sec: float) -> bool:
-        ttl_ms = max(int(ttl_sec * 1000), 1)
+        ttl_ms = max(math.ceil(ttl_sec * 1000), 1)
         result = self._redis.set(name=f"veritas:nonce:{nonce}", value="1", nx=True, px=ttl_ms)
         return bool(result)
 
@@ -1152,12 +1153,14 @@ def _get_api_secret() -> bytes:
     return env_secret.encode("utf-8")
 
 
-def _check_and_register_nonce(nonce: str) -> bool:
-    """Check and register a nonce for replay attack prevention."""
+def _check_and_register_nonce(
+    nonce: str, ttl_sec: float = _NONCE_TTL_SEC,
+) -> bool:
+    """Check and retain a nonce for the caller's full replay window."""
     if len(nonce) > _NONCE_MAX_LENGTH:
         return False
 
-    return _auth_store_register_nonce(nonce=nonce, ttl_sec=_NONCE_TTL_SEC)
+    return _auth_store_register_nonce(nonce=nonce, ttl_sec=ttl_sec)
 
 
 def _is_nonce_shape_valid(nonce: str | None) -> bool:
@@ -1221,7 +1224,14 @@ async def verify_signature(
     if not hmac.compare_digest(mac, signature.lower()):
         _record_auth_reject_reason("signature_invalid")
         raise HTTPException(status_code=401, detail="Invalid signature")
-    if not _check_and_register_nonce(nonce):
+    # Timestamp validation is symmetric and uses integer seconds. A future
+    # timestamp remains acceptable beyond one TTL after first admission; the
+    # inclusive final second also needs retention. Keep at least the original
+    # TTL, and never expire a nonce while its signed timestamp is acceptable.
+    nonce_ttl_sec = max(
+        _NONCE_TTL_SEC, ts + _NONCE_TTL_SEC + 1 - time.time(),
+    )
+    if not _check_and_register_nonce(nonce, ttl_sec=nonce_ttl_sec):
         _record_auth_reject_reason("signature_replay_detected")
         raise HTTPException(status_code=401, detail="Replay detected")
     return True

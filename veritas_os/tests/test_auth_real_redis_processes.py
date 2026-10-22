@@ -1,4 +1,4 @@
-"""Bounded Redis process/restart tests; no HTTP, power-loss or rollback proof."""
+"""Bounded Redis process/ASGI auth tests; no external effect or rollback proof."""
 
 from __future__ import annotations
 
@@ -297,3 +297,53 @@ def test_real_redis_unsafe_settings_refuse_strict_factory_and_guard(real_redis):
     with _worker(url, profile="local") as worker:
         assert worker.command("factory") is True
         assert worker.command("guard") is True
+
+
+@pytest.mark.parametrize("offset", [0, 300])
+def test_real_redis_http_nonce_covers_signature_window(real_redis, monkeypatch, offset):
+    """Actual mounted HMAC route stores the full window in a real Redis key."""
+    import hashlib
+    import hmac
+    from types import SimpleNamespace
+    from fastapi.testclient import TestClient
+    from veritas_os.api import auth, server
+
+    _, _, redis_client = real_redis
+    key = "real-redis-http-test-key"
+    secret = b"real-redis-http-synthetic-secret-32"
+    now = 2_000_000_000
+    timestamp = now + offset
+    nonce = "real-http-window"
+    calls = []
+    monkeypatch.setenv("VERITAS_API_KEY", key)
+    monkeypatch.delenv("VERITAS_API_KEYS", raising=False)
+    monkeypatch.setenv("VERITAS_ENV", "production")
+    monkeypatch.setattr(server, "API_KEY_DEFAULT", key)
+    monkeypatch.setattr(server, "API_SECRET", secret)
+    monkeypatch.setattr(server, "_AUTH_SECURITY_STORE", auth.RedisAuthSecurityStore(redis_client))
+    monkeypatch.setattr(auth.time, "time", lambda: float(now))
+
+    async def run_replay(decision_id):
+        calls.append(decision_id)
+        return SimpleNamespace(
+            decision_id=decision_id, replay_path="fixture", match=True,
+            diff_summary="", replay_time_ms=1, schema_version="1.1.0",
+            severity="info", divergence_level="no_divergence", audit_summary="",
+        )
+
+    monkeypatch.setattr(server, "run_replay", run_replay)
+    payload = f"{timestamp}\n{nonce}\n{{}}".encode()
+    headers = {
+        "X-API-Key": key, "X-Timestamp": str(timestamp), "X-Nonce": nonce,
+        "X-Signature": hmac.new(secret, payload, hashlib.sha256).hexdigest(),
+        "Content-Type": "application/json",
+    }
+    client = TestClient(server.app)
+    try:
+        assert client.post("/v1/replay/fixture", headers=headers, content="{}").status_code == 200
+        remaining_ms = redis_client.pttl(f"veritas:nonce:{nonce}")
+        assert (offset + 300) * 1000 < remaining_ms <= (offset + 301) * 1000
+        assert client.post("/v1/replay/fixture", headers=headers, content="{}").status_code == 401
+        assert calls == ["fixture"]
+    finally:
+        client.close()
