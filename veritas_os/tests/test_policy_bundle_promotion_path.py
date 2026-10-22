@@ -10,6 +10,7 @@ import pytest
 from veritas_os.logging.encryption import generate_key
 from veritas_os.policy import find_bind_receipts
 from veritas_os.policy.bind_artifacts import FinalOutcome
+from veritas_os.policy.hash import semantic_policy_hash
 from veritas_os.policy.policy_bundle_promotion import promote_policy_bundle_with_bind_boundary
 
 
@@ -42,11 +43,17 @@ def _write_bundle(bundle_dir, *, with_signature: bool = True) -> None:
         encoding="utf-8",
     )
 
+    canonical_bytes = (bundle_dir / "compiled" / "canonical_ir.json").read_bytes()
     manifest = {
         "schema_version": "0.1",
         "policy_id": "policy.operations",
         "version": "1.0.0",
-        "semantic_hash": "dummy-semantic-hash",
+        "semantic_hash": semantic_policy_hash(canonical_ir),
+        "bundle_contents": [{
+            "path": "compiled/canonical_ir.json",
+            "sha256": hashlib.sha256(canonical_bytes).hexdigest(),
+            "size": len(canonical_bytes),
+        }],
         "compiler_version": "test",
         "compiled_at": "2026-04-20T00:00:00Z",
         "signing": {"algorithm": "sha256"},
@@ -142,7 +149,7 @@ def test_policy_bundle_promotion_apply_failure(tmp_path, monkeypatch) -> None:
     assert "BIND_APPLY_FAILED" in (receipt.rollback_reason or "")
 
 
-def test_policy_bundle_promotion_postcondition_failure_rolls_back(tmp_path) -> None:
+def test_policy_bundle_promotion_missing_signature_blocks_before_apply(tmp_path) -> None:
     kwargs = _base_kwargs(tmp_path)
     (kwargs["target_bundle_dir"] / "manifest.sig").unlink(missing_ok=True)
 
@@ -152,7 +159,7 @@ def test_policy_bundle_promotion_postcondition_failure_rolls_back(tmp_path) -> N
         append_trustlog=False,
     )
 
-    assert receipt.final_outcome is FinalOutcome.ROLLED_BACK
+    assert receipt.final_outcome is FinalOutcome.BLOCKED
     restored = json.loads(kwargs["pointer_path"].read_text(encoding="utf-8"))
     assert restored["active_bundle_dir"].endswith("bundle-v1")
 

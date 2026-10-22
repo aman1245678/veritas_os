@@ -82,6 +82,30 @@ request remains BLOCKED/ESCALATED under the configured missing-evidence policy;
 an override request is rejected without changing the pointer. These fixtures do
 not establish cryptographic bundle authenticity or production deployment safety.
 
+## Policy bundle verification before promotion
+
+Signature-required promotion reuses `load_runtime_bundle()` during Bind
+constraint validation, immediately before writing the active pointer, and in
+postcondition verification. Invalid bundles are refused before the pointer is
+written; a later verification failure retains the existing rollback path.
+
+Verification requires manifest integrity and exact manifest-declared content
+bindings, including canonical-IR digest, semantic hash, policy id and version.
+Secure/prod posture or `VERITAS_POLICY_REQUIRE_ED25519=true` requires an Ed25519
+signature with the trusted public key configured by `VERITAS_POLICY_VERIFY_KEY`.
+Non-strict legacy SHA-256 mode verifies integrity only; it does not establish
+signer authenticity. Bundles without content declarations must be rebuilt before
+signature-required promotion. The trusted internal `require_signature=False`
+compatibility option is not exposed by the public promotion request.
+
+HTTP tests use generated Ed25519 keys, compiler-produced temporary bundles and
+the real promotion/Bind path. Invalid signatures, modified manifests/bodies,
+wrong/missing keys and missing signatures cause zero pointer writes. Controlled
+changes after validation or after writing exercise revalidation and rollback.
+This does not make the bundle directory immutable against concurrent filesystem
+modification; filesystem ownership and subsequent runtime verification remain
+separate boundaries.
+
 ## TrustLog and lineage integration
 
 - `ExecutionIntent` appends as `kind=governance.execution_intent` via the

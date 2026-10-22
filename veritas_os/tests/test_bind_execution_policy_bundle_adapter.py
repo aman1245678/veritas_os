@@ -9,6 +9,7 @@ from veritas_os.logging.encryption import generate_key
 from veritas_os.policy.bind_artifacts import ExecutionIntent, FinalOutcome, find_bind_receipts
 from veritas_os.policy.bind_boundary_adapters import PolicyBundlePromotionAdapter
 from veritas_os.policy.bind_execution import execute_bind_boundary
+from veritas_os.policy.hash import semantic_policy_hash
 
 
 def _write_bundle(bundle_dir, *, with_signature: bool) -> None:
@@ -40,11 +41,17 @@ def _write_bundle(bundle_dir, *, with_signature: bool) -> None:
         encoding="utf-8",
     )
 
+    canonical_bytes = (bundle_dir / "compiled" / "canonical_ir.json").read_bytes()
     manifest = {
         "schema_version": "0.1",
         "policy_id": "policy.operations",
         "version": "1.0.0",
-        "semantic_hash": "dummy-semantic-hash",
+        "semantic_hash": semantic_policy_hash(canonical_ir),
+        "bundle_contents": [{
+            "path": "compiled/canonical_ir.json",
+            "sha256": hashlib.sha256(canonical_bytes).hexdigest(),
+            "size": len(canonical_bytes),
+        }],
         "compiler_version": "test",
         "compiled_at": "2026-04-20T00:00:00Z",
         "signing": {"algorithm": "sha256"},
@@ -141,7 +148,7 @@ def test_real_adapter_blocked_bind_by_authority(tmp_path) -> None:
     assert not pointer_path.exists()
 
 
-def test_real_adapter_postcondition_failure_rolls_back(tmp_path) -> None:
+def test_real_adapter_missing_signature_blocks_before_apply(tmp_path) -> None:
     bundles_root = tmp_path / "bundles"
     old_bundle = bundles_root / "bundle-v1"
     new_bundle = bundles_root / "bundle-v2"
@@ -174,7 +181,7 @@ def test_real_adapter_postcondition_failure_rolls_back(tmp_path) -> None:
     )
     receipt = execute_bind_boundary(execution_intent=intent, adapter=adapter, append_trustlog=False)
 
-    assert receipt.final_outcome is FinalOutcome.ROLLED_BACK
+    assert receipt.final_outcome is FinalOutcome.BLOCKED
     restored_pointer = json.loads(pointer_path.read_text(encoding="utf-8"))
     assert restored_pointer["active_bundle_dir"] == str(old_bundle.resolve())
 

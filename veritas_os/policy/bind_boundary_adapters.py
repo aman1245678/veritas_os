@@ -14,6 +14,7 @@ from typing import Any, Callable
 from veritas_os.core.atomic_io import atomic_write_json
 from veritas_os.policy.bind_artifacts import ExecutionIntent
 from veritas_os.policy.bind_core.contracts import BindAdapterContract
+from veritas_os.policy.runtime_adapter import load_runtime_bundle
 from veritas_os.security.hash import sha256_of_canonical_json
 
 
@@ -233,6 +234,8 @@ class PolicyBundlePromotionAdapter(BindAdapterContract):
             "target_within_allowed_root": self._is_within_allowed_root(target_dir),
             "manifest_exists": (target_dir / "manifest.json").exists(),
             "canonical_ir_exists": (target_dir / "compiled" / "canonical_ir.json").exists(),
+            "bundle_verified": self._is_within_allowed_root(target_dir)
+            and self._verify_bundle(target_dir),
         }
 
     def assess_runtime_risk(self, intent: ExecutionIntent, snapshot: Any) -> bool | None:
@@ -245,6 +248,9 @@ class PolicyBundlePromotionAdapter(BindAdapterContract):
         """Apply promotion by atomically writing active bundle pointer."""
         del snapshot
         target_dir = self._resolve_target(intent)
+        # Recheck immediately before mutation, even after constraint validation.
+        if not self._is_within_allowed_root(target_dir) or not self._verify_bundle(target_dir):
+            raise ValueError("BIND_POLICY_BUNDLE_VERIFICATION_FAILED")
         pointer_payload = {
             "active_bundle_dir": str(target_dir),
             "decision_id": intent.decision_id,
@@ -268,9 +274,24 @@ class PolicyBundlePromotionAdapter(BindAdapterContract):
         if not (target_dir / "compiled" / "canonical_ir.json").exists():
             return False
 
-        if self.require_signature and not (target_dir / "manifest.sig").exists():
+        if not self._verify_bundle(target_dir):
             return False
         return True
+
+    def _verify_bundle(self, target_dir: Path) -> bool:
+        """Reuse runtime verification before exposing a signature-required bundle.
+
+        Secure/prod posture requires trusted Ed25519 verification. Development
+        compatibility may use SHA-256 integrity, but exact content binding is
+        still required. The explicit trusted internal unsigned mode is retained.
+        """
+        if not self.require_signature:
+            return True
+        try:
+            bundle = load_runtime_bundle(target_dir)
+        except (ValueError, OSError, TypeError):
+            return False
+        return bundle.manifest_integrity_verified and bundle.bundle_contents_verified
 
     def revert(self, intent: ExecutionIntent, snapshot: Any) -> bool:
         """Revert promotion by restoring pre-apply pointer snapshot."""
