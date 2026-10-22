@@ -11,6 +11,8 @@ jsonschema==4.23.0
 openai==1.53.0
 httpx==0.28.1
 requests==2.34.2
+# Fixed GHSA-6q48-6c7w-9gw2 in the TLS trust bundle.
+certifi==2026.10.19
 # Fixed CVE-2026-45409 in IDNA URL handling.
 idna==3.15
 numpy==1.26.4

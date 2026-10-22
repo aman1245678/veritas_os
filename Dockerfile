@@ -12,8 +12,9 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /build
 
+# pip 26.2.2 also updates its vendored certifi trust bundle.
 COPY ./veritas_os/requirements.txt /tmp/requirements.txt
-RUN pip install --no-cache-dir --upgrade "pip>=24.3" "setuptools>=78.1.1" "wheel>=0.46.2" \
+RUN pip install --no-cache-dir --upgrade "pip==26.2.2" "setuptools>=78.1.1" "wheel>=0.46.2" \
     && pip install --no-cache-dir --target /build/deps -r /tmp/requirements.txt
 
 # ============================================================
@@ -29,13 +30,14 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 WORKDIR /app
 
 # セキュリティパッチ適用（ベースイメージの既知CVE修正）
+# Update pip's vendored certifi as well as the app-level dependency.
 RUN apt-get update \
     && apt-get upgrade -y --no-install-recommends \
     && apt-get install -y --no-install-recommends \
         libgnutls30=3.7.9-2+deb12u7 \
         perl-base=5.36.0-7+deb12u4 \
     && rm -rf /var/lib/apt/lists/* \
-    && pip install --no-cache-dir --upgrade "pip>=24.3" "setuptools>=78.1.1" "wheel>=0.46.2"
+    && pip install --no-cache-dir --upgrade "pip==26.2.2" "setuptools>=78.1.1" "wheel>=0.46.2"
 
 # ビルドステージからインストール済みパッケージのみコピー（ビルドツール類を除外）
 COPY --from=builder /build/deps /app/deps

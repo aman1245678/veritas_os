@@ -54,6 +54,7 @@ EXPECTED_CORE = {
 }
 
 EXPECTED_OPTIONAL = {
+    "pillow",
     "scikit-learn",
     "sentence-transformers",
     "matplotlib",
