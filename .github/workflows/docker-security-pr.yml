@@ -32,12 +32,82 @@ jobs:
           sbom: false
           tags: veritas-os-pr:${{ github.sha }}
 
+      - name: Verify installed trust bundles and image libraries
+        run: |
+          mkdir -p test-reports
+          test "$(git rev-parse HEAD)" = "${{ github.sha }}"
+          docker run --rm --entrypoint python veritas-os-pr:${{ github.sha }} -m pip check
+          docker run --rm -i --entrypoint python \
+            -e TESTED_SHA="${{ github.sha }}" veritas-os-pr:${{ github.sha }} - \
+            > test-reports/image-dependencies.json <<'PY'
+          import io
+          import json
+          import os
+          import ssl
+          import certifi
+          import pip
+          from pip._vendor import certifi as pip_certifi
+          from PIL import Image, __version__ as pillow_version
+          import matplotlib
+          from matplotlib.backends.backend_agg import FigureCanvasAgg
+          from matplotlib.figure import Figure
+          import pdfplumber
+
+          assert certifi.__version__ == "2026.10.19"
+          assert pip.__version__ == "26.2.2"
+          assert pip_certifi.__version__ == "2026.10.19"
+          assert pillow_version == "13.0.0"
+          for bundle in (certifi.where(), pip_certifi.where()):
+              context = ssl.create_default_context(cafile=bundle)
+              assert context.cert_store_stats()["x509_ca"] > 0
+          for format_name in ("PNG", "JPEG"):
+              data = io.BytesIO()
+              Image.new("RGB", (8, 8), "white").save(data, format=format_name)
+              data.seek(0)
+              with Image.open(data) as image:
+                  image.load()
+                  assert image.size == (8, 8)
+          figure = Figure()
+          FigureCanvasAgg(figure)
+          figure.subplots().plot([0, 1], [0, 1])
+          data = io.BytesIO()
+          figure.savefig(data, format="png")
+          data.seek(0)
+          with Image.open(data) as image:
+              image.verify()
+          print(json.dumps({
+              "tested_sha": os.environ["TESTED_SHA"],
+              "certifi": certifi.__version__,
+              "pip": pip.__version__,
+              "pip_vendored_certifi": pip_certifi.__version__,
+              "pillow": pillow_version,
+              "matplotlib": matplotlib.__version__,
+              "pdfplumber": pdfplumber.__version__,
+              "trust_bundles_loaded": True,
+              "png_jpeg_roundtrip": True,
+              "matplotlib_png_rendered": True,
+              "external_tls_or_provider_call_tested": False,
+          }, indent=2))
+          PY
+          docker image inspect --format '{{.Id}}' veritas-os-pr:${{ github.sha }} \
+            > test-reports/image-id.txt
+          cat test-reports/image-dependencies.json
+
       - name: Enforce Trivy gate (actionable criticals only)
         uses: aquasecurity/trivy-action@0.35.0
         with:
           image-ref: veritas-os-pr:${{ github.sha }}
           format: table
+          output: test-reports/trivy-critical.txt
           scanners: vuln
           severity: CRITICAL
           ignore-unfixed: true
           exit-code: '1'
+
+      - name: Upload image dependency evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: image-dependency-evidence
+          path: test-reports/
+          if-no-files-found: warn

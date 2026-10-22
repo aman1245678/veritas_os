@@ -12,6 +12,7 @@
 
 # --- Optional [reports]: CLI / Dashboard / PDF Tools ---
 matplotlib==3.9.2
+pillow==13.0.0
 pandas==2.2.3
 pdfplumber==0.11.9
 pdfminer.six==20251230
