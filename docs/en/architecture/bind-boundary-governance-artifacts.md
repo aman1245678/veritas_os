@@ -46,6 +46,26 @@ Not guaranteed by this document alone:
 - environment-specific production hardening and operational controls
 - universal production-readiness claims across every deployment context
 
+## Compliance configuration policy source
+
+`PUT /v1/compliance/config` reads the current governance policy through
+`get_policy()` before Bind adjudication. Its `bind_adjudication` controls and
+`updated_at` / `version` identity accompany the execution intent. The separate
+runtime compliance configuration remains the state captured by the adapter for
+drift checks and mutation; it is not the source of governance policy controls.
+
+When policy requires TTL or approval freshness, missing evidence blocks or
+escalates the update according to `missing_signal_default`, with HTTP 403 and no
+configuration mutation. The current configuration request does not carry those
+expiry signals, so enabling either requirement prevents updates through this
+route until an appropriate evidence path is provided. Default policies without
+these requirements retain the existing successful update behavior.
+
+The focused HTTP tests use real route authentication, adapter and Bind
+adjudication with isolated configuration and audit storage. They establish this
+management-route policy boundary, not external-operation or customer-deployment
+coverage.
+
 ## TrustLog and lineage integration
 
 - `ExecutionIntent` appends as `kind=governance.execution_intent` via the
