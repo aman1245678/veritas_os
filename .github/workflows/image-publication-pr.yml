@@ -1,0 +1,70 @@
+name: Image Publication Gate PR
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/publish-ghcr.yml
+      - .github/workflows/image-publication-pr.yml
+      - scripts/ci/publish_scanned_oci.sh
+      - tests/ci/test_image_publication_gate.py
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  scan-and-copy-without-publication:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Verify refusal paths
+        run: |
+          python -m pip install pytest PyYAML
+          python -m pytest -q tests/ci/test_image_publication_gate.py
+      - name: Build unpublished OCI archive with attestations
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64
+          push: false
+          outputs: type=oci,dest=${{ runner.temp }}/veritas-image.tar
+          provenance: true
+          sbom: true
+      - name: Install OCI copy tool
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends skopeo
+      - name: Install scanner and record advisory report
+        uses: aquasecurity/trivy-action@0.35.0
+        with:
+          input: ${{ runner.temp }}/veritas-image.tar
+          format: sarif
+          output: trivy-results.sarif
+          scanners: vuln
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: '0'
+      - name: Exercise real scan and digest-preserving local copy
+        env:
+          TESTED_SHA: ${{ github.sha }}
+        run: |
+          test "$(git rev-parse HEAD)" = "$TESTED_SHA"
+          mkdir -p test-reports
+          printf '%s\n' "$TESTED_SHA" > test-reports/tested-sha.txt
+          bash scripts/ci/publish_scanned_oci.sh \
+            "$RUNNER_TEMP/veritas-image.tar" test-reports \
+            "oci:$RUNNER_TEMP/verified-image:pr"
+          skopeo inspect --raw "oci:$RUNNER_TEMP/verified-image:pr" \
+            > test-reports/copied-manifest.json
+          expected=$(cat test-reports/manifest-digest.txt)
+          actual="sha256:$(sha256sum test-reports/copied-manifest.json | cut -d ' ' -f 1)"
+          test "$actual" = "$expected"
+      - name: Upload bounded publication evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: image-publication-pr-evidence
+          path: test-reports/
+          if-no-files-found: warn
