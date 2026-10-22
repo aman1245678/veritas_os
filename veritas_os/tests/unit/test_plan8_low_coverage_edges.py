@@ -78,7 +78,7 @@ def test_schedule_rate_bucket_cleanup_logs_and_reschedules(
 def test_cleanup_nonces_unsafe_uses_fallback_on_invalid_server_override(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Invalid nonce max override should fall back to module default safely."""
+    """Cleanup must preserve unexpired records despite invalid capacity config."""
     now = 1_700_000_000.0
     monkeypatch.setattr(rl.time, "time", lambda: now)
 
@@ -101,7 +101,7 @@ def test_cleanup_nonces_unsafe_uses_fallback_on_invalid_server_override(
         remaining = dict(rl._nonce_store)
         rl._nonce_store.clear()
 
-    assert len(remaining) == 2
+    assert set(remaining) == {"n1", "n2", "n3"}
 
 
 def test_schedule_nonce_cleanup_stops_when_timer_is_none(

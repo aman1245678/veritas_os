@@ -101,16 +101,15 @@ def _effective_nonce_max() -> int:
 
 
 def _cleanup_nonces_unsafe() -> None:
-    """内部用: ロック取得済み前提のクリーンアップ"""
+    """Remove expired entries only; callers must hold the nonce lock.
+
+    Unexpired entries must survive capacity pressure to prevent replay.
+    New registrations enforce capacity under the same lock instead.
+    """
     now = time.time()
     expired_keys = [k for k, until in _nonce_store.items() if now > until]
     for k in expired_keys:
         _nonce_store.pop(k, None)
-    nonce_max = _effective_nonce_max()
-    if len(_nonce_store) > nonce_max:
-        overflow = len(_nonce_store) - nonce_max
-        for k in list(_nonce_store.keys())[:overflow]:
-            _nonce_store.pop(k, None)
 
 
 def _cleanup_nonces() -> None:

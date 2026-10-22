@@ -4969,7 +4969,9 @@ class TestCleanupNonces:
             for i in range(5):
                 server._nonce_store[f"overflow_nonce_{i}"] = time.time() + 300
             server._cleanup_nonces_unsafe()
-            assert len([k for k in server._nonce_store if k.startswith("overflow_nonce_")]) <= 3
+            assert all(
+                f"overflow_nonce_{i}" in server._nonce_store for i in range(5)
+            )
         finally:
             server._NONCE_MAX = original_max
             # Clean up test nonces
