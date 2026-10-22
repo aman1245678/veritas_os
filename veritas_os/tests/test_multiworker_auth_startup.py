@@ -65,8 +65,17 @@ def test_production_single_worker_memory_store_remains_allowed(monkeypatch, capl
 
 
 def test_production_multiworker_redis_store_passes_guard(monkeypatch):
-    # Backend construction/availability is checked separately by the factory.
-    store = auth.RedisAuthSecurityStore(object())
+    class InspectedRedis:
+        def config_get(self, name):
+            return {name: {
+                "appendonly": "yes", "appendfsync": "always",
+                "no-appendfsync-on-rewrite": "no", "maxmemory-policy": "noeviction",
+            }[name]}
+
+        def info(self, section):
+            return {"aof_enabled": 1, "aof_last_write_status": "ok"}
+
+    store = auth.RedisAuthSecurityStore(InspectedRedis())
     monkeypatch.setattr(auth, "_get_effective_auth_store", lambda: store)
     monkeypatch.setenv("VERITAS_ENV", "production")
     monkeypatch.setenv("WEB_CONCURRENCY", "2")
