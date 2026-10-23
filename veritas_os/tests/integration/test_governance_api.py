@@ -1060,6 +1060,49 @@ def test_governance_policy_bundle_promote_success(monkeypatch, tmp_path: Path) -
     assert body["bind_summary"]["bind_outcome"] == "COMMITTED"
 
 
+@pytest.mark.parametrize("required", ["ttl_required", "approval_freshness_required"])
+@pytest.mark.parametrize("missing_signal, outcome", [("block", "BLOCKED"), ("escalate", "ESCALATED")])
+def test_promotion_http_cannot_override_current_bind_policy(
+    monkeypatch, tmp_path: Path, required: str, missing_signal: str, outcome: str,
+) -> None:
+    """Client approval metadata cannot disable a policy-required check."""
+    from veritas_os.policy.bind_core import core as bind_core
+
+    bundles_root = tmp_path / "bundles"
+    bundle_dir = bundles_root / "bundle-v2"
+    (bundle_dir / "compiled").mkdir(parents=True)
+    (bundle_dir / "manifest.json").write_text("{}", encoding="utf-8")
+    (bundle_dir / "manifest.sig").write_text("fixture", encoding="utf-8")
+    (bundle_dir / "compiled" / "canonical_ir.json").write_text("{}", encoding="utf-8")
+    pointer_path = tmp_path / "active_bundle.json"
+    pointer_before = '{"active_bundle_dir":"previous-bundle"}'
+    pointer_path.write_text(pointer_before, encoding="utf-8")
+    monkeypatch.setenv("VERITAS_POLICY_BUNDLES_ROOT", str(bundles_root))
+    monkeypatch.setenv("VERITAS_POLICY_ACTIVE_POINTER_PATH", str(pointer_path))
+    monkeypatch.setattr(srv, "get_policy", lambda: {
+        "bind_adjudication": {required: True, "missing_signal_default": missing_signal},
+    })
+    # Exercise the real route, promotion helper, adapter and adjudication.
+    monkeypatch.setattr(bind_core, "append_execution_intent_trustlog", lambda intent: None)
+    monkeypatch.setattr(bind_core, "append_bind_receipt_trustlog", lambda receipt: receipt)
+    body = {
+        "bundle_id": "bundle-v2", "decision_id": "dec-policy-override",
+        "request_id": "req-policy-override", "policy_snapshot_id": "fixture-policy",
+        "decision_hash": "a" * 64,
+        "approval_context": {"policy_bundle_promotion_approved": True},
+    }
+    control = client.post("/v1/governance/policy-bundles/promote", headers=HEADERS, json=body)
+    assert control.status_code == 200
+    assert control.json()["bind_outcome"] == outcome
+    assert pointer_path.read_text(encoding="utf-8") == pointer_before
+
+    body["approval_context"]["bind_adjudication"] = {required: False}
+    response = client.post("/v1/governance/policy-bundles/promote", headers=HEADERS, json=body)
+    assert pointer_path.read_text(encoding="utf-8") == pointer_before
+    assert response.status_code == 400
+    assert response.json()["error"] == "approval_context_policy_override_forbidden"
+
+
 def test_governance_policy_bundle_promote_blocked_returns_lineage(monkeypatch) -> None:
     class _DummyReceipt:
         def to_dict(self) -> dict:

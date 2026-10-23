@@ -167,8 +167,11 @@ def test_replay_api_endpoint_with_hmac_headers(monkeypatch):
     monkeypatch.setattr(server, "API_KEY_DEFAULT", _TEST_API_KEY)
     monkeypatch.setenv("VERITAS_API_SECRET", "a" * 32)
     monkeypatch.setattr(server, "API_SECRET", b"")
+    monkeypatch.setenv("VERITAS_REPLAY_STRICT", "false")
+    replay_modes = []
 
     async def _fake_run_replay(decision_id: str, strict=None):
+        replay_modes.append(strict)
         return server.SimpleNamespace(
             decision_id=decision_id,
             replay_path="/tmp/replay.json",
@@ -183,7 +186,7 @@ def test_replay_api_endpoint_with_hmac_headers(monkeypatch):
 
     monkeypatch.setattr(server, "run_replay", _fake_run_replay)
 
-    body = json.dumps({"strict": True}, separators=(",", ":"))
+    body = json.dumps({"strict": False}, separators=(",", ":"))
     ts = str(int(time.time()))
     nonce = "nonce-replay-endpoint"
     payload = f"{ts}\n{nonce}\n{body}"
@@ -207,6 +210,7 @@ def test_replay_api_endpoint_with_hmac_headers(monkeypatch):
     assert payload_json["decision_id"] == "dec-9"
     assert payload_json["match"] is True
     assert payload_json["replay_time_ms"] == 9
+    assert replay_modes == [True]
 
 
 

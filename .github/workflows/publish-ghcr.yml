@@ -28,30 +28,27 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Log in to GHCR
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Build and push image
+      - name: Build unpublished OCI layout
         uses: docker/build-push-action@v6
         with:
           context: .
-          push: true
+          platforms: linux/amd64
+          push: false
+          outputs: type=oci,dest=${{ runner.temp }}/veritas-image,tar=false
           provenance: true
           sbom: true
           cache-from: type=gha
           cache-to: type=gha,mode=max
-          tags: |
-            ${{ steps.image.outputs.name }}:latest
-            ${{ steps.image.outputs.name }}:${{ github.sha }}
+
+      - name: Install OCI copy tool
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends skopeo
 
       - name: Run Trivy vulnerability scanner
         uses: aquasecurity/trivy-action@0.35.0
         with:
-          image-ref: ${{ steps.image.outputs.name }}:${{ github.sha }}
+          input: ${{ runner.temp }}/veritas-image
           format: sarif
           output: trivy-results.sarif
           scanners: vuln
@@ -59,15 +56,35 @@ jobs:
           ignore-unfixed: true
           exit-code: '0'
 
-      - name: Enforce Trivy gate (actionable criticals only)
-        uses: aquasecurity/trivy-action@0.35.0
+      - name: Log in to GHCR
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+        uses: docker/login-action@v3
         with:
-          image-ref: ${{ steps.image.outputs.name }}:${{ github.sha }}
-          format: table
-          scanners: vuln
-          severity: CRITICAL
-          ignore-unfixed: true
-          exit-code: '1'
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Scan and publish the same OCI layout
+        env:
+          IMAGE_NAME: ${{ steps.image.outputs.name }}
+          TESTED_SHA: ${{ github.sha }}
+          EVENT_REF: ${{ github.ref }}
+        run: |
+          test "$(git rev-parse HEAD)" = "$TESTED_SHA"
+          mkdir -p test-reports
+          printf '%s\n' "$TESTED_SHA" > test-reports/tested-sha.txt
+          test "$EVENT_REF" = refs/heads/main
+          bash scripts/ci/publish_scanned_oci.sh \
+            "$RUNNER_TEMP/veritas-image" test-reports \
+            "docker://$IMAGE_NAME:$TESTED_SHA" "docker://$IMAGE_NAME:latest"
+
+      - name: Upload scan and publication evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: image-publication-evidence
+          path: test-reports/
+          if-no-files-found: warn
 
       - name: Upload Trivy scan results to GitHub Security
         uses: github/codeql-action/upload-sarif@v3

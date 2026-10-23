@@ -14,7 +14,7 @@ permission. Read the current route modules for exact paths.
 | --- | --- | --- |
 | Public system: root, health, status aliases | Public | No HMAC |
 | Decide: `/v1/decide`, `/v1/fuji/validate` | API key + rate limit | `decide`; no HMAC dependency |
-| `/v1/replay/{decision_id}` | API key + rate limit | Handler manually invokes HMAC verification; no separate RBAC permission dependency |
+| `/v1/replay/{decision_id}` | API key + rate limit | Handler manually invokes HMAC verification and forces strict replay; no separate RBAC permission dependency |
 | `/v1/decision/replay/{decision_id}` | API key + rate limit | `trust_log_read`; forces mocked external APIs; no HMAC dependency |
 | Memory: put / erase | API key + rate limit | `memory_write`; tenant identity derived from API key; no HMAC |
 | Memory: get / search | API key + rate limit | `memory_read`; tenant identity derived from API key; no HMAC |
@@ -35,10 +35,13 @@ would not establish enforcement; the legacy replay handler explicitly calls it.
 Absence of HMAC on other routes is not itself evidence of an authentication
 bypass. Bind single-use execution authorization remains a separate boundary.
 
-The two replay handlers use different engines and contracts. This review does
-not establish that the legacy engine always suppresses external calls: its
-`strict` behavior is selected from deployment configuration/posture. Replay
-execution safety and stream authorization remain separate review surfaces.
+The two replay handlers use different engines and contracts. The legacy public
+handler explicitly requests `strict=True`, which makes its replay engine mock
+external APIs and disable the replay memory store, regardless of the deployment
+default or signed request body. Other callers of the engine can still choose
+non-strict behavior; this route check does not establish global outbound-network
+isolation or permission parity with the other replay handler. Replay execution
+safety and stream authorization remain separate review surfaces.
 
 ## Nonce expiry defect and correction
 

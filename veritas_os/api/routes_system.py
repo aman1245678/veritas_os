@@ -730,7 +730,7 @@ def compliance_get_config() -> Dict[str, Any]:
 def compliance_put_config(body: ComplianceConfigBody) -> Dict[str, Any]:
     """Update runtime compliance config via bind-boundary adjudication."""
     srv = _get_server()
-    current = get_runtime_config()
+    current_policy = srv.get_policy()
     payload = {
         "eu_ai_act_mode": body.eu_ai_act_mode,
         "safety_threshold": body.safety_threshold,
@@ -740,13 +740,17 @@ def compliance_put_config(body: ComplianceConfigBody) -> Dict[str, Any]:
         decision_id=decision_id,
         request_id=decision_id,
         actor_identity="api",
-        policy_snapshot_id="compliance_runtime_config",
+        policy_snapshot_id=str(
+            current_policy.get("updated_at")
+            or current_policy.get("version")
+            or "compliance_runtime_config"
+        ),
         decision_hash=sha256_of_canonical_json(payload),
         config_patch=payload,
         config_reader=get_runtime_config,
         config_updater=update_runtime_config,
         approval_context={"compliance_config_update_approved": True},
-        governance_policy=current if isinstance(current, dict) else None,
+        governance_policy=current_policy,
     ).to_dict()
     bind_payload = build_bind_response_payload(bind_receipt)
     updated = get_runtime_config()

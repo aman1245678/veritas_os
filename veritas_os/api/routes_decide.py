@@ -645,7 +645,9 @@ async def replay_endpoint(decision_id: str, request: Request):
         x_veritas_signature=request.headers.get("X-VERITAS-SIGNATURE"),
     )
     try:
-        result = await srv.run_replay(decision_id=decision_id)
+        # The public audit path must never inherit a non-strict deployment
+        # default that allows replay to call external APIs.
+        result = await srv.run_replay(decision_id=decision_id, strict=True)
     except CanonicalReplayError:
         return JSONResponse(
             status_code=409,
