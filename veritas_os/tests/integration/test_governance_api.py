@@ -14,6 +14,7 @@ pytestmark = pytest.mark.integration
 
 
 import json
+import shutil
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
@@ -1024,13 +1025,22 @@ def test_governance_bind_receipts_list_invalid_query_returns_400(monkeypatch) ->
     assert invalid_cursor_resp.json()["detail"] == "invalid_cursor"
 
 
+def _write_promotion_bundle(bundles_root: Path) -> Path:
+    """Create a compiler-produced bundle with manifest content bindings."""
+    from veritas_os.policy.compiler import compile_policy_to_bundle
+
+    result = compile_policy_to_bundle(
+        Path("policies/examples/low_risk_route_allow.yaml"),
+        bundles_root.parent / "compiled-bundle",
+    )
+    bundle_dir = bundles_root / "bundle-v2"
+    shutil.copytree(result.bundle_dir, bundle_dir)
+    return bundle_dir
+
+
 def test_governance_policy_bundle_promote_success(monkeypatch, tmp_path: Path) -> None:
     bundles_root = tmp_path / "bundles"
-    bundle_dir = bundles_root / "bundle-v2"
-    (bundle_dir / "compiled").mkdir(parents=True)
-    (bundle_dir / "manifest.json").write_text("{}", encoding="utf-8")
-    (bundle_dir / "manifest.sig").write_text("sig", encoding="utf-8")
-    (bundle_dir / "compiled" / "canonical_ir.json").write_text("{}", encoding="utf-8")
+    _write_promotion_bundle(bundles_root)
     pointer_path = tmp_path / "runtime" / "active_bundle.json"
 
     monkeypatch.setenv("VERITAS_POLICY_BUNDLES_ROOT", str(bundles_root))
@@ -1069,11 +1079,7 @@ def test_promotion_http_cannot_override_current_bind_policy(
     from veritas_os.policy.bind_core import core as bind_core
 
     bundles_root = tmp_path / "bundles"
-    bundle_dir = bundles_root / "bundle-v2"
-    (bundle_dir / "compiled").mkdir(parents=True)
-    (bundle_dir / "manifest.json").write_text("{}", encoding="utf-8")
-    (bundle_dir / "manifest.sig").write_text("fixture", encoding="utf-8")
-    (bundle_dir / "compiled" / "canonical_ir.json").write_text("{}", encoding="utf-8")
+    _write_promotion_bundle(bundles_root)
     pointer_path = tmp_path / "active_bundle.json"
     pointer_before = '{"active_bundle_dir":"previous-bundle"}'
     pointer_path.write_text(pointer_before, encoding="utf-8")
