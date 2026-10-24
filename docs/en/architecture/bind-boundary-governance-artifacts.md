@@ -82,6 +82,20 @@ request remains BLOCKED/ESCALATED under the configured missing-evidence policy;
 an override request is rejected without changing the pointer. These fixtures do
 not establish cryptographic bundle authenticity or production deployment safety.
 
+## Governance update lineage boundary
+
+`PUT /v1/governance/policy` rejects HTTP `policy_lineage` containing the reserved
+`bind_adjudication` key with HTTP 400, before approval processing or mutation.
+The current server-side governance policy supplies Bind controls; request
+lineage cannot disable its TTL or approval-freshness requirements. Ordinary
+lineage metadata and trusted internal helper overrides remain compatible.
+
+Regression tests exercise the real HTTP, approval, adapter and persistence path
+with a temporary governance policy. Control requests with missing required
+signals remain BLOCKED/ESCALATED, and override requests produce no policy update
+calls or file changes. This is a bounded API regression, not proof of all
+execution paths or production IAM enforcement.
+
 ## Policy bundle verification before promotion
 
 Signature-required promotion reuses `load_runtime_bundle()` during Bind

@@ -42,6 +42,59 @@ def _approved(payload: dict | None = None) -> dict:
     return base
 
 
+@pytest.mark.parametrize("required", ["ttl_required", "approval_freshness_required"])
+@pytest.mark.parametrize("missing_signal, outcome", [("block", "BLOCKED"), ("escalate", "ESCALATED")])
+def test_policy_update_http_rejects_bind_policy_override_in_lineage(
+    monkeypatch, _temp_policy: Path, required: str, missing_signal: str, outcome: str,
+) -> None:
+    """Untrusted lineage must not disable current policy checks before a write."""
+    from veritas_os.policy.bind_core import core as bind_core
+
+    current = json.loads(_temp_policy.read_text(encoding="utf-8"))
+    current["bind_adjudication"][required] = True
+    current["bind_adjudication"]["missing_signal_default"] = missing_signal
+    _temp_policy.write_text(json.dumps(current), encoding="utf-8")
+    before = _temp_policy.read_bytes()
+    updates = []
+    real_update = srv.update_policy
+
+    def track_update(patch):
+        updates.append(patch)
+        return real_update(patch)
+
+    monkeypatch.setattr(srv, "update_policy", track_update)
+    monkeypatch.setattr(bind_core, "append_execution_intent_trustlog", lambda intent: None)
+    monkeypatch.setattr(bind_core, "append_bind_receipt_trustlog", lambda receipt: receipt)
+    body = _approved({"risk_thresholds": {"allow_upper": 0.45}})
+    control = client.put("/v1/governance/policy", headers=HEADERS, json=body)
+    assert control.status_code == 403
+    assert control.json()["bind_outcome"] == outcome
+    assert updates == []
+    assert _temp_policy.read_bytes() == before
+
+    body["policy_lineage"] = {"bind_adjudication": {required: False}}
+    response = client.put("/v1/governance/policy", headers=HEADERS, json=body)
+    assert updates == []
+    assert _temp_policy.read_bytes() == before
+    assert response.status_code == 400
+    assert response.json()["error"] == "policy_lineage_policy_override_forbidden"
+
+
+def test_policy_update_http_accepts_non_policy_lineage(_temp_policy: Path) -> None:
+    """Ordinary lineage metadata retains the existing governed update path."""
+    response = client.put(
+        "/v1/governance/policy", headers=HEADERS,
+        json=_approved({
+            "risk_thresholds": {"allow_upper": 0.45},
+            "policy_lineage": {"source": "http-regression-fixture"},
+        }),
+    )
+    assert response.status_code == 200
+    assert response.json()["bind_outcome"] == "COMMITTED"
+    persisted = json.loads(_temp_policy.read_text(encoding="utf-8"))
+    assert persisted["risk_thresholds"]["allow_upper"] == 0.45
+
+
 @pytest.fixture(autouse=True)
 def _temp_policy(tmp_path: Path, monkeypatch):
     """Use a temporary governance.json for every test."""
