@@ -14,7 +14,7 @@ from uuid import uuid4
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 
-from veritas_os.api.auth import require_permission
+from veritas_os.api.auth import require_authenticated_principal, require_permission
 from veritas_os.api.bind_summary import (
     build_bind_response_payload,
     build_bind_summary_from_receipt,
@@ -52,14 +52,6 @@ def _get_server():
     """Late import to avoid circular dependency at module load time."""
     from veritas_os.api import server as srv
     return srv
-
-
-def _authenticated_governance_actor(request: Request) -> str:
-    """Use only the principal attached by successful API authentication."""
-    principal = getattr(request.state, "authenticated_principal_id", None)
-    if not isinstance(principal, str) or not principal.strip() or principal == "anon":
-        raise HTTPException(status_code=403, detail="Authenticated principal required")
-    return principal
 
 
 class BindReceiptListSort(str):
@@ -478,7 +470,7 @@ def governance_put(body: dict, request: Request):
             status_code=400,
             content={"ok": False, "error": "policy_lineage_policy_override_forbidden"},
         )
-    actor_identity = _authenticated_governance_actor(request)
+    actor_identity = require_authenticated_principal(request)
     srv = _get_server()
     with trace_step(
         "governance.policy_update.request",
@@ -882,7 +874,7 @@ def governance_promote_policy_bundle(
             content={"ok": False, "error": "approval_context_policy_override_forbidden"},
         )
     bundle_name = (body.bundle_id or body.bundle_dir_name or "").strip()
-    actor_identity = _authenticated_governance_actor(request)
+    actor_identity = require_authenticated_principal(request)
     try:
         target_bundle_dir, pointer_path, bundles_root = _resolve_policy_bundle_paths(bundle_name)
     except ValueError:
