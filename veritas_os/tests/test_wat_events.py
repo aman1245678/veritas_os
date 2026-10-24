@@ -6,11 +6,13 @@ from pathlib import Path
 
 import pytest
 
+from veritas_os.audit import wat_events
 from veritas_os.audit.wat_events import (
     derive_latest_revocation_state,
     persist_wat_validation_event,
     persist_wat_issuance_event,
     persist_wat_revocation_event,
+    list_wat_events,
 )
 
 
@@ -37,6 +39,41 @@ def test_derive_latest_revocation_state_confirmed(tmp_path: Path) -> None:
     state = derive_latest_revocation_state("wat-2", path=path)
     assert state["status"] == "revoked_confirmed"
     assert state["source"] == "wat_events"
+
+
+@pytest.mark.parametrize("confirmed", [False, True])
+def test_revocation_survives_browsing_window(
+    tmp_path: Path, monkeypatch, confirmed: bool,
+) -> None:
+    """Validation telemetry cannot hide a retained revocation after 500 rows."""
+    monkeypatch.setattr(wat_events, "_build_anchor_reference", lambda event: {})
+    path = tmp_path / "wat_events.jsonl"
+    revoked = persist_wat_revocation_event(
+        wat_id="revoked", actor="test", confirmed=confirmed, path=path,
+    )
+    for _ in range(500):
+        persist_wat_validation_event(wat_id="revoked", actor="test", path=path)
+    # The browsing cap is intentional; it must not define revocation state.
+    assert len(list_wat_events(wat_id="revoked", limit=1000, path=path)) == 500
+    state = derive_latest_revocation_state("revoked", path=path)
+    assert state["status"] == ("revoked_confirmed" if confirmed else "revoked_pending")
+    assert state["event_id"] == revoked["event_id"]
+    assert derive_latest_revocation_state("other-wat", path=path)["status"] == "active"
+
+
+def test_confirmed_revocation_survives_later_pending(tmp_path: Path, monkeypatch) -> None:
+    """A later pending request is not an explicit revocation reset."""
+    monkeypatch.setattr(wat_events, "_build_anchor_reference", lambda event: {})
+    path = tmp_path / "wat_events.jsonl"
+    revoked = persist_wat_revocation_event(
+        wat_id="revoked", actor="test", confirmed=True, path=path,
+    )
+    persist_wat_revocation_event(
+        wat_id="revoked", actor="test", confirmed=False, path=path,
+    )
+    state = derive_latest_revocation_state("revoked", path=path)
+    assert state["status"] == "revoked_confirmed"
+    assert state["event_id"] == revoked["event_id"]
 
 
 def test_primary_audit_path_stores_metadata_and_pointers_only(tmp_path: Path) -> None:

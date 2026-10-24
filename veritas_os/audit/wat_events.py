@@ -423,18 +423,23 @@ def derive_latest_revocation_state(
     *,
     path: Optional[Path] = None,
 ) -> Dict[str, Any]:
-    """Derive structured local revocation state from latest WAT lane event.
+    """Derive revocation state from all retained events for this WAT.
 
     Returns a mapping compatible with ``validate_local(revocation_state=...)``:
     ``status`` is always one of ``active``, ``revoked_pending``,
-    ``revoked_confirmed``.
+    ``revoked_confirmed``. Browsing limits never hide revocations. Confirmed
+    revocation dominates later pending/telemetry events; v1 has no reset event.
     """
     target = str(wat_id or "").strip()
     if not target:
         return {"status": "active", "source": "wat_events"}
 
-    timeline = list_wat_events(wat_id=target, limit=500, path=path)
-    for event in timeline:
+    with _WAT_LOCK:
+        timeline = _load_wat_events(path)
+    latest_pending: Optional[Dict[str, Any]] = None
+    for event in reversed(timeline):
+        if str(event.get("wat_id", "")).strip() != target:
+            continue
         event_type = str(event.get("event_type", "")).strip()
         if event_type == "wat_revoked_confirmed":
             return {
@@ -444,14 +449,16 @@ def derive_latest_revocation_state(
                 "event_id": event.get("event_id"),
                 "ts": event.get("ts"),
             }
-        if event_type == "wat_revocation_pending":
-            return {
-                "status": "revoked_pending",
-                "source": "wat_events",
-                "event_type": event_type,
-                "event_id": event.get("event_id"),
-                "ts": event.get("ts"),
-            }
+        if event_type == "wat_revocation_pending" and latest_pending is None:
+            latest_pending = event
+    if latest_pending is not None:
+        return {
+            "status": "revoked_pending",
+            "source": "wat_events",
+            "event_type": "wat_revocation_pending",
+            "event_id": latest_pending.get("event_id"),
+            "ts": latest_pending.get("ts"),
+        }
     return {"status": "active", "source": "wat_events"}
 
 
