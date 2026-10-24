@@ -18,7 +18,7 @@ from fastapi import APIRouter, Depends, Query, Request, WebSocket, WebSocketDisc
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
-from veritas_os.api.auth import require_permission
+from veritas_os.api.auth import require_authenticated_principal, require_permission
 from veritas_os.api.bind_summary import build_bind_response_payload
 from veritas_os.api.rbac import Permission
 from veritas_os.api.schemas import (
@@ -727,8 +727,9 @@ def compliance_get_config() -> Dict[str, Any]:
     target_type="compliance_config",
     target_path_type="compliance_config_update",
 )
-def compliance_put_config(body: ComplianceConfigBody) -> Dict[str, Any]:
+def compliance_put_config(body: ComplianceConfigBody, request: Request) -> Dict[str, Any]:
     """Update runtime compliance config via bind-boundary adjudication."""
+    actor_identity = require_authenticated_principal(request)
     srv = _get_server()
     current_policy = srv.get_policy()
     payload = {
@@ -739,7 +740,7 @@ def compliance_put_config(body: ComplianceConfigBody) -> Dict[str, Any]:
     bind_receipt = update_compliance_config_with_bind_boundary(
         decision_id=decision_id,
         request_id=decision_id,
-        actor_identity="api",
+        actor_identity=actor_identity,
         policy_snapshot_id=str(
             current_policy.get("updated_at")
             or current_policy.get("version")
@@ -828,17 +829,18 @@ def report_governance(from_: str = Query(alias="from"), to: str = Query(alias="t
     target_type="system_halt",
     target_path_type="system_halt",
 )
-def system_halt(body: SystemHaltRequest):
+def system_halt(body: SystemHaltRequest, request: Request):
     """Halt the AI decision system (Art. 14(4) emergency stop)."""
+    actor_identity = require_authenticated_principal(request)
     srv = _get_server()
     try:
         current_policy = srv.get_policy()
-        payload = {"reason": body.reason, "operator": body.operator}
+        payload = {"reason": body.reason, "operator": actor_identity}
         decision_id = uuid4().hex
         bind_receipt = halt_system_with_bind_boundary(
             decision_id=decision_id,
             request_id=decision_id,
-            actor_identity=body.operator,
+            actor_identity=actor_identity,
             policy_snapshot_id=str(
                 current_policy.get("updated_at")
                 or current_policy.get("version")
@@ -846,7 +848,7 @@ def system_halt(body: SystemHaltRequest):
             ),
             decision_hash=sha256_of_canonical_json(payload),
             reason=body.reason,
-            operator=body.operator,
+            operator=actor_identity,
             status_reader=srv.SystemHaltController.status,
             halt_executor=srv.SystemHaltController.halt,
             approval_context={"system_halt_approved": True},
@@ -885,24 +887,25 @@ def system_halt(body: SystemHaltRequest):
     target_type="system_resume",
     target_path_type="system_resume",
 )
-def system_resume(body: SystemResumeRequest):
+def system_resume(body: SystemResumeRequest, request: Request):
     """Resume the AI decision system after a halt (Art. 14(4))."""
+    actor_identity = require_authenticated_principal(request)
     srv = _get_server()
     try:
         current_policy = srv.get_policy()
-        payload = {"operator": body.operator, "comment": body.comment}
+        payload = {"operator": actor_identity, "comment": body.comment}
         decision_id = uuid4().hex
         bind_receipt = resume_system_with_bind_boundary(
             decision_id=decision_id,
             request_id=decision_id,
-            actor_identity=body.operator,
+            actor_identity=actor_identity,
             policy_snapshot_id=str(
                 current_policy.get("updated_at")
                 or current_policy.get("version")
                 or "system_resume"
             ),
             decision_hash=sha256_of_canonical_json(payload),
-            operator=body.operator,
+            operator=actor_identity,
             comment=body.comment,
             status_reader=srv.SystemHaltController.status,
             resume_executor=srv.SystemHaltController.resume,
