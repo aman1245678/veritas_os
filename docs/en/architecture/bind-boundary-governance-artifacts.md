@@ -46,6 +46,27 @@ Not guaranteed by this document alone:
 - environment-specific production hardening and operational controls
 - universal production-readiness claims across every deployment context
 
+## Authenticated actor for governance mutations
+
+`PUT /v1/governance/policy`, `POST /v1/governance/policy-bundles/promote`,
+`PUT /v1/compliance/config`, `POST /v1/system/halt` and `POST /v1/system/resume`
+use the API-authenticated principal from request state for `actor_identity` in
+ExecutionIntent and BindReceipt. Caller-supplied `updated_by` and `X-Role`
+labels do not establish that identity. Missing authenticated principal context
+returns HTTP 403 before mutation. Existing role/tenant and approval checks still
+apply, and the policy's `updated_by` remains caller-supplied display metadata.
+
+The shared `require_authenticated_principal()` reader enforces this boundary.
+For HTTP halt/resume requests, the authenticated principal also supplies the
+effective operator in the action hash, controller call, status and history.
+The request's `operator` field remains accepted for payload compatibility but
+cannot establish who performed the action. Internal controller/helper callers
+retain their existing explicit operator arguments.
+
+This identifies an API credential, not an independently authenticated human.
+It does not cryptographically authenticate the two approval records or establish
+enterprise IAM integration. Other API routes are outside this actor boundary.
+
 ## Compliance configuration policy source
 
 `PUT /v1/compliance/config` reads the current governance policy through

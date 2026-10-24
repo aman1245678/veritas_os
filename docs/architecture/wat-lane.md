@@ -89,6 +89,15 @@ cannot emit `wat_issued`, `wat_revocation_pending`, or
 `wat_revoked_confirmed`; issuance and revocation transitions are isolated to
 their dedicated endpoints and persistence helpers.
 
+Revocation derivation reads all retained events for the exact WAT id, separately
+from the 500-record browsing cap. A retained confirmed revocation dominates
+later pending, issuance, validation or replay telemetry; v1 has no reset event.
+If only pending revocations exist, the latest pending event supplies provenance.
+This guarantee is limited to records still present in the local event store;
+pruning, store deletion/replacement and rollback resistance remain separate
+retention and operational boundaries. WAT remains observer telemetry, not
+execution authority.
+
 ### B) Decide observer hook (`/v1/decide`)
 
 1. `/v1/decide` runs normal pipeline/gating flow.

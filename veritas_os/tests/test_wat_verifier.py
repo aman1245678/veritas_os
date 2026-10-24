@@ -480,6 +480,38 @@ def test_validate_local_revoked_confirmed_is_hard_fail(tmp_path: Path) -> None:
     assert result["admissibility_state"] == "non_admissible"
 
 
+def test_retained_confirmation_still_hard_fails_after_later_pending(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    """Persisted state must preserve the verifier's confirmed-revocation veto."""
+    from veritas_os.audit import wat_events
+
+    monkeypatch.setattr(wat_events, "_build_anchor_reference", lambda event: {})
+    path = tmp_path / "wat-events.jsonl"
+    for confirmed in (True, False):
+        wat_events.persist_wat_revocation_event(
+            wat_id="wat-revoked", actor="test", confirmed=confirmed, path=path,
+        )
+    signer, signed_wat = _signed_wat(tmp_path)
+    claims = signed_wat["claims"]
+    result = validate_local(
+        signed_wat=signed_wat,
+        psid_full_local="psid-full-001",
+        action_digest_local=str(claims["action_digest"]),
+        observable_refs_local=[{"obs": "A"}],
+        observable_digest_local=str(claims["observable_digest"]),
+        issuance_ts_local=int(claims["issuance_ts"]),
+        expiry_ts_local=int(claims["expiry_ts"]),
+        execution_nonce="nonce-1",
+        session_id="session-1",
+        revocation_state=wat_events.derive_latest_revocation_state("wat-revoked", path=path),
+        signer=signer,
+        now_ts=1_712_000_100,
+    )
+    assert result["validation_status"] == "revoked_confirmed"
+    assert result["admissibility_state"] == "non_admissible"
+
+
 def test_validate_local_unknown_revocation_status_defaults_to_active(tmp_path: Path) -> None:
     signer, signed_wat = _signed_wat(tmp_path)
     result = validate_local(

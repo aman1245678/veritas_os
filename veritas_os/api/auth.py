@@ -929,6 +929,14 @@ def _bind_authenticated_principal(
     return principal_id
 
 
+def require_authenticated_principal(request: Request) -> str:
+    """Read the principal attached by successful API authentication, or refuse."""
+    principal = getattr(request.state, "authenticated_principal_id", None)
+    if not isinstance(principal, str) or not principal.strip() or principal == "anon":
+        raise HTTPException(status_code=403, detail="Authenticated principal required")
+    return principal
+
+
 def _resolve_memory_user_id(body_user_id: Any, x_api_key: Optional[str]) -> str:
     """Resolve memory tenant user_id while preventing caller-controlled spoofing."""
     resolved = _derive_api_user_id(x_api_key)
