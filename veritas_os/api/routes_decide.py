@@ -529,6 +529,19 @@ async def decide(req: DecideRequest, request: Request):
         )
 
     srv = _get_server()
+    # Emergency halt applies independently of optional compliance processing.
+    # Inspect one locked status snapshot before loading or running the pipeline.
+    halt_status = srv.SystemHaltController.status()
+    if halt_status["halted"]:
+        _record("halted")
+        return _svc.error_response(
+            503,
+            error="System is halted",
+            status="HALTED",
+            decision_status="rejected",
+            blocked_by="Art.14(4)_system_halt",
+            halt_status=halt_status,
+        )
     p = srv.get_decision_pipeline()
     if p is None:
         _log_decide_failure("decision_pipeline unavailable", srv._pipeline_state.err)

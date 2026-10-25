@@ -196,6 +196,8 @@ async def test_decide_pipeline_unavailable_resets_lazy_state(
     """Pipeline unavailable path should return 503 and reset lazy state."""
 
     class _DummyServer:
+        SystemHaltController = SimpleNamespace(status=lambda: {"halted": False})
+
         class _LazyState:
             def __init__(self) -> None:
                 self.obj = "recovered"
@@ -276,6 +278,8 @@ async def test_decide_pipeline_exception_returns_classified_error(
             raise RuntimeError("pipeline exploded")
 
     class _DummyServer:
+        SystemHaltController = SimpleNamespace(status=lambda: {"halted": False})
+
         @staticmethod
         def get_decision_pipeline() -> _BoomPipeline:
             return _BoomPipeline()

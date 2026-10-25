@@ -64,6 +64,8 @@ async def test_decide_pipeline_unavailable_resets_lazy_state_when_mutated(
     """Unavailable pipeline path should reset lazy state and return 503 payload."""
 
     class _DummyServer:
+        SystemHaltController = SimpleNamespace(status=lambda: {"halted": False})
+
         class _LazyState:
             def __init__(self) -> None:
                 self.obj = "reset"

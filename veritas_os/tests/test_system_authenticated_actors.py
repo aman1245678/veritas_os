@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 from fastapi.testclient import TestClient
 
-from veritas_os.api import auth, routes_system, server
+from veritas_os.api import auth, pipeline_orchestrator, routes_system, server
 from veritas_os.core.eu_ai_act_oversight import SystemHaltController
 from veritas_os.policy.bind_core import core as bind_core
 from veritas_os.security.hash import sha256_of_canonical_json
@@ -96,3 +98,40 @@ def test_management_effect_refuses_missing_principal(
     assert config == {"eu_ai_act_mode": False, "safety_threshold": 0.8}
     assert SystemHaltController.status() == before
     assert SystemHaltController._history == []
+
+
+@pytest.mark.parametrize("compliance_enabled", [False, True])
+def test_http_halt_blocks_decide_until_resume(
+    monkeypatch, management_state, compliance_enabled,
+):
+    """A committed halt must stop admission before loading the pipeline."""
+    client, config, _ = management_state
+    config["eu_ai_act_mode"] = compliance_enabled
+    monkeypatch.setattr(pipeline_orchestrator, "get_runtime_config", lambda: dict(config))
+    pipeline = SimpleNamespace(run_decide_pipeline=AsyncMock(return_value={
+        "ok": True, "request_id": "halt-admission-test", "chosen": {},
+    }))
+    load_pipeline = Mock(return_value=pipeline)
+    monkeypatch.setattr(server, "get_decision_pipeline", load_pipeline)
+    monkeypatch.setattr(server, "_publish_event", lambda *args, **kwargs: None)
+    headers = {"X-API-Key": "management-actor-one"}
+    assert _request(client, "halt", headers["X-API-Key"]).json()["bind_outcome"] == "COMMITTED"
+
+    for _ in range(2):
+        response = client.post("/v1/decide", headers=headers, json={"query": "test"})
+        assert response.status_code == 503
+        assert response.json()["status"] == "HALTED"
+        assert response.json()["decision_status"] == "rejected"
+        assert response.json()["halt_status"]["halted"] is True
+        assert response.json()["ok"] is False
+    unauthenticated = client.post("/v1/decide", json={"query": "test"})
+    assert unauthenticated.status_code == 401
+    assert "halt_status" not in unauthenticated.json()
+    load_pipeline.assert_not_called()
+    pipeline.run_decide_pipeline.assert_not_awaited()
+
+    assert _request(client, "resume", headers["X-API-Key"]).json()["bind_outcome"] == "COMMITTED"
+    response = client.post("/v1/decide", headers=headers, json={"query": "test"})
+    assert response.status_code == 200
+    load_pipeline.assert_called_once()
+    pipeline.run_decide_pipeline.assert_awaited_once()
