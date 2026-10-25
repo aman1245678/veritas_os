@@ -85,13 +85,17 @@ Those guarantees require separate execution and deployment controls.
 Startup rejects declared multi-worker API deployments in production/strict
 profiles while this controller remains process-local. Either `WEB_CONCURRENCY`
 or `UVICORN_WORKERS` greater than one triggers refusal, including when Redis
-authentication is configured. Non-strict deployments emit a warning. Set both
-declared counts to one and run a single API process for this bounded halt
+authentication is configured. Explicit `--workers N` and `--workers=N`
+arguments from the standard `uvicorn` executable or `python -m uvicorn` are
+also inspected, including inside spawned workers. An environment count of one
+cannot hide an explicit CLI count greater than one. Non-strict deployments emit
+a warning. Set both declared counts to one and run a single API process for this bounded halt
 behavior; Redis shares authentication state, not halt/resume state.
 
-This guard only inspects the declared environment at startup. It does not
-detect worker counts supplied exclusively through CLI options, independent
-replicas, or additional hosts, and it does not make restart recovery durable.
+This guard inspects declared environment counts and standard Uvicorn CLI worker
+arguments at startup. It does not detect programmatic `uvicorn.run()` worker
+configuration, custom launchers, Gunicorn configuration, independent replicas,
+or additional hosts, and it does not make restart recovery durable.
 Operators must keep the actual process topology consistent with the declared
 single-process configuration.
 
