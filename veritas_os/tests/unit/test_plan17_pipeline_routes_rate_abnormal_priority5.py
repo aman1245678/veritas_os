@@ -63,6 +63,8 @@ async def test_decide_uses_anonymous_user_when_request_context_missing(
             }
 
     class _Server:
+        SystemHaltController = SimpleNamespace(status=lambda: {"halted": False})
+
         class _LazyState:
             def __init__(self) -> None:
                 self.obj = None
