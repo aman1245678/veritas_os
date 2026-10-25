@@ -67,6 +67,21 @@ This identifies an API credential, not an independently authenticated human.
 It does not cryptographically authenticate the two approval records or establish
 enterprise IAM integration. Other API routes are outside this actor boundary.
 
+## Decision admission during emergency halt
+
+After a committed `POST /v1/system/halt`, authenticated `POST /v1/decide`
+requests in the same process return HTTP 503 with `status: HALTED` and
+`decision_status: rejected` before the decision pipeline is loaded or invoked.
+This check applies whether runtime EU AI Act compliance mode is enabled or
+disabled. A committed resume allows subsequent requests to enter the pipeline
+again, subject to its usual checks. API authentication and permissions still
+run before the halt response.
+
+This is an admission check against the controller's process-local state. It
+does not cancel requests already admitted, stop other execution endpoints,
+persist a halt across restarts, or synchronize a halt across workers or hosts.
+Those guarantees require separate execution and deployment controls.
+
 ## Compliance configuration policy source
 
 `PUT /v1/compliance/config` reads the current governance policy through
