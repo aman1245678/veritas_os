@@ -90,6 +90,8 @@ def validate_startup_security_flags(*, logger: logging.Logger) -> None:
     """Validate high-risk startup flags so dangerous configs are never silent.
 
     Security policy:
+    - Declared multiple API workers are refused in production/strict mode
+      because emergency halt state is process-local, even with Redis auth.
     - `VERITAS_AUTH_ALLOW_FAIL_OPEN=true` must never be present in production.
     - `VERITAS_AUTH_STORE_FAILURE_MODE=open` must also be surfaced explicitly so
       operators can see the effective fail-open request during startup.
@@ -115,6 +117,27 @@ def validate_startup_security_flags(*, logger: logging.Logger) -> None:
     direct_fuji_key_present = _is_env_key_present("VERITAS_ENABLE_DIRECT_FUJI_API")
     direct_fuji_enabled = _is_truthy_env("VERITAS_ENABLE_DIRECT_FUJI_API")
     public_api_base_url = (os.getenv("NEXT_PUBLIC_VERITAS_API_BASE_URL") or "").strip()
+
+    # Redis auth state does not share the emergency halt controller's memory.
+    # Inspect both declared counts independently so one malformed value cannot
+    # hide an explicit multi-worker setting in the other variable.
+    for worker_var in ("WEB_CONCURRENCY", "UVICORN_WORKERS"):
+        try:
+            worker_count = int((os.getenv(worker_var) or "").strip())
+        except ValueError:
+            continue
+        if worker_count <= 1:
+            continue
+        message = (
+            "[SECURITY] The process-local emergency halt is not shared across "
+            f"workers ({worker_var}={worker_count}). Redis authentication does "
+            "not synchronize halt/resume state. Use one API worker per "
+            "deployment until a shared halt boundary is implemented."
+        )
+        if is_production:
+            raise RuntimeError(f"{message} Refusing startup in production/strict mode.")
+        logger.warning("%s", message)
+        break
 
     if is_node_production and not is_production:
         logger.warning(

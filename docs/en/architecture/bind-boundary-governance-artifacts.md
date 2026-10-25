@@ -82,6 +82,19 @@ does not cancel requests already admitted, stop other execution endpoints,
 persist a halt across restarts, or synchronize a halt across workers or hosts.
 Those guarantees require separate execution and deployment controls.
 
+Startup rejects declared multi-worker API deployments in production/strict
+profiles while this controller remains process-local. Either `WEB_CONCURRENCY`
+or `UVICORN_WORKERS` greater than one triggers refusal, including when Redis
+authentication is configured. Non-strict deployments emit a warning. Set both
+declared counts to one and run a single API process for this bounded halt
+behavior; Redis shares authentication state, not halt/resume state.
+
+This guard only inspects the declared environment at startup. It does not
+detect worker counts supplied exclusively through CLI options, independent
+replicas, or additional hosts, and it does not make restart recovery durable.
+Operators must keep the actual process topology consistent with the declared
+single-process configuration.
+
 ## Compliance configuration policy source
 
 `PUT /v1/compliance/config` reads the current governance policy through
