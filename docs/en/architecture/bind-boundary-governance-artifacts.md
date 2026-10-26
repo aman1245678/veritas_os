@@ -120,10 +120,17 @@ available and are not proof of protected API readiness.
 This closes protected HTTP admission when startup is skipped, including
 Uvicorn `--lifespan off`, and when initialization fails or the API shuts down.
 It does not make a server with disabled lifespan exit automatically, terminate
-already admitted work, attest a different process or host, or extend this check
-to WebSocket admission. Direct trusted helper calls without an HTTP Request
-retain their compatibility behavior; normal FastAPI dependencies receive the
-actual Request. Non-strict profiles retain their existing behavior.
+already admitted work, or attest a different process or host. Direct trusted
+helper calls without an HTTP Request retain their compatibility behavior; normal
+FastAPI dependencies receive the actual Request. Non-strict profiles retain their existing behavior.
+
+The mounted TrustLog WebSocket uses its own header-first API-key check; the
+HTTP-only SSE authentication dependency is attached only to the SSE route.
+Invalid WebSocket credentials close with code 1008. In strict profiles, valid
+credentials with incomplete startup or a mismatched PID close with code 1013
+and reason `security_startup_incomplete`, before acceptance or event-hub
+registration. Production query-string credentials remain refused. This is an
+admission check; it does not terminate already accepted WebSocket streams.
 
 Startup rejects declared multi-worker API deployments in production/strict
 profiles while this controller remains process-local. Either `WEB_CONCURRENCY`

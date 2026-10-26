@@ -954,7 +954,8 @@ app.include_router(_wat_router, dependencies=_auth_deps)
 app.include_router(_governance_router, dependencies=_gov_deps)
 app.include_router(_system_router, dependencies=[Depends(require_api_key)])
 app.include_router(_observability_router, dependencies=[Depends(require_api_key)])
-app.include_router(_events_router, dependencies=[Depends(require_api_key_header_or_query)])
+# SSE owns its HTTP dependency; WebSocket authenticates its own connection.
+app.include_router(_events_router)
 
 
 # ==============================

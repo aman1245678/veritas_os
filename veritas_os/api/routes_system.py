@@ -18,7 +18,11 @@ from fastapi import APIRouter, Depends, Query, Request, WebSocket, WebSocketDisc
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
-from veritas_os.api.auth import require_authenticated_principal, require_permission
+from veritas_os.api.auth import (
+    require_api_key_header_or_query,
+    require_authenticated_principal,
+    require_permission,
+)
 from veritas_os.api.bind_summary import build_bind_response_payload
 from veritas_os.api.rbac import Permission
 from veritas_os.api.schemas import (
@@ -644,7 +648,7 @@ async def metrics(decide_file_limit: int = Query(default=500, ge=1, le=5000)):
 # SSE events
 # ------------------------------------------------------------------
 
-@events_router.get("/v1/events")
+@events_router.get("/v1/events", dependencies=[Depends(require_api_key_header_or_query)])
 async def events(request: Request, heartbeat_sec: int = Query(default=15, ge=5, le=60)):
     """Server-Sent Events stream for near-real-time UI updates."""
     srv = _get_server()
@@ -674,10 +678,16 @@ async def events(request: Request, heartbeat_sec: int = Query(default=15, ge=5, 
 
 @events_router.websocket("/v1/ws/trustlog")
 async def trustlog_ws(websocket: WebSocket):
-    """WebSocket stream for Debate/Critique trust logs."""
+    """Stream trust logs only after WebSocket authentication and strict startup."""
     srv = _get_server()
     if not srv._authenticate_websocket_api_key(websocket):
         await websocket.close(code=1008, reason="invalid_api_key")
+        return
+
+    from veritas_os.api.startup_health import security_startup_is_complete
+
+    if not security_startup_is_complete(websocket.scope.get("app")):
+        await websocket.close(code=1013, reason="security_startup_incomplete")
         return
 
     await websocket.accept()
