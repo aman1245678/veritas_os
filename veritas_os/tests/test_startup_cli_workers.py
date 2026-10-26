@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib.util
 import logging
 import os
 from pathlib import Path
@@ -22,6 +23,7 @@ def isolated_deployment(monkeypatch):
         "VERITAS_POSTURE", "VERITAS_REQUIRE_PRODUCTION_TRUSTLOG_POSTURE", "NODE_ENV",
         "VERITAS_AUTH_ALLOW_FAIL_OPEN", "VERITAS_AUTH_STORE_FAILURE_MODE",
         "NEXT_PUBLIC_VERITAS_API_BASE_URL", "VERITAS_ENABLE_DIRECT_FUJI_API",
+        "SERVER_SOFTWARE", "GUNICORN_CMD_ARGS",
     ):
         monkeypatch.delenv(key, raising=False)
     monkeypatch.setenv("VERITAS_ENV", "production")
@@ -65,10 +67,32 @@ def test_local_cli_multiple_workers_warn(monkeypatch, caplog):
     assert "process-local emergency halt" in caplog.text
 
 
+@pytest.mark.parametrize("runtime", ["multiprocessing", "gunicorn"])
+@pytest.mark.parametrize("profile", ["production", "local"])
+def test_managed_worker_context_is_refused_or_warned(monkeypatch, caplog, runtime, profile):
+    monkeypatch.setenv("VERITAS_ENV", profile)
+    if runtime == "multiprocessing":
+        monkeypatch.setattr("multiprocessing.parent_process", lambda: object())
+    else:
+        monkeypatch.setenv("SERVER_SOFTWARE", "gunicorn/23.0.0")
+    if profile == "production":
+        with pytest.raises(RuntimeError, match="process-local emergency halt"):
+            startup_health.run_startup_config_validation(
+                logger=logging.getLogger(__name__), validator=lambda: None,
+            )
+    else:
+        startup_health.run_startup_config_validation(
+            logger=logging.getLogger(__name__), validator=lambda: None,
+        )
+        assert "process-local emergency halt" in caplog.text
+
+
 @pytest.mark.skipif(os.name != "posix", reason="process-group cleanup requires POSIX")
-@pytest.mark.parametrize("module_cli", [True, False])
-def test_real_uvicorn_workers_refuse_startup(tmp_path, module_cli):
-    """Exercise argv inherited by real spawned Uvicorn workers on loopback."""
+@pytest.mark.parametrize("launcher_kind", ["module", "executable", "programmatic", "gunicorn"])
+def test_real_uvicorn_workers_refuse_startup(tmp_path, launcher_kind):
+    """Exercise actual managed workers and startup refusal on loopback."""
+    if launcher_kind == "gunicorn" and importlib.util.find_spec("gunicorn") is None:
+        pytest.skip("optional Gunicorn validation requires gunicorn installed")
     (tmp_path / "worker_probe.py").write_text(
         "from contextlib import asynccontextmanager\n"
         "import logging\n"
@@ -84,14 +108,30 @@ def test_real_uvicorn_workers_refuse_startup(tmp_path, module_cli):
         "app = FastAPI(lifespan=lifespan)\n",
         encoding="utf-8",
     )
-    launcher = ([sys.executable, "-m", "uvicorn"] if module_cli else
-                [str(Path(sys.executable).with_name("uvicorn"))])
-    worker_args = ["--workers", "2"] if module_cli else ["--workers=2"]
+    if launcher_kind == "programmatic":
+        (tmp_path / "launch_probe.py").write_text(
+            "import uvicorn\n"
+            "if __name__ == '__main__':\n"
+            "    uvicorn.run('worker_probe:app', host='127.0.0.1', port=0, workers=2)\n",
+            encoding="utf-8",
+        )
+        command = [sys.executable, "launch_probe.py"]
+    elif launcher_kind == "gunicorn":
+        (tmp_path / "gunicorn.conf.py").write_text("workers = 2\n", encoding="utf-8")
+        command = [
+            sys.executable, "-m", "gunicorn", "worker_probe:app",
+            "--worker-class", "uvicorn.workers.UvicornWorker", "--bind", "127.0.0.1:0",
+        ]
+    else:
+        launcher = ([sys.executable, "-m", "uvicorn"] if launcher_kind == "module" else
+                    [str(Path(sys.executable).with_name("uvicorn"))])
+        worker_args = ["--workers", "2"] if launcher_kind == "module" else ["--workers=2"]
+        command = [*launcher, "worker_probe:app", "--host", "127.0.0.1", "--port", "0", *worker_args]
     env = dict(os.environ)
     env["PYTHONPATH"] = str(Path(__file__).resolve().parents[2])
     lines = []
     with subprocess.Popen(
-        [*launcher, "worker_probe:app", "--host", "127.0.0.1", "--port", "0", *worker_args],
+        command,
         cwd=tmp_path, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
         start_new_session=True,
     ) as process:
@@ -107,11 +147,20 @@ def test_real_uvicorn_workers_refuse_startup(tmp_path, module_cli):
                         break
                     lines.append(chunk.decode("utf-8", errors="replace"))
                     output = "".join(lines)
-                    if "WORKER_ADMITTED" in output or output.count("Application startup failed") >= 2:
+                    if (
+                        "WORKER_ADMITTED" in output
+                        or (launcher_kind != "gunicorn" and output.count("Application startup failed") >= 2)
+                        or (launcher_kind == "gunicorn" and "Reason: Worker failed to boot" in output)
+                    ):
                         break
             output = "".join(lines)
             assert "WORKER_ADMITTED" not in output, output
-            assert output.count("Application startup failed") >= 2, output
+            if launcher_kind == "gunicorn":
+                assert "Application startup failed" in output, output
+                assert "Reason: Worker failed to boot" in output, output
+                assert process.wait(timeout=10) != 0
+            else:
+                assert output.count("Application startup failed") >= 2, output
             assert "process-local emergency halt" in output, output
         finally:
             try:
