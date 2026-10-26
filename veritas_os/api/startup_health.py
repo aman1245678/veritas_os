@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import logging
 import os
+import sys
+from pathlib import Path
 from typing import Callable, Optional
 
 from veritas_os.security.trustlog_production_posture import (
@@ -59,6 +61,34 @@ def should_fail_fast_startup(profile: Optional[str] = None) -> bool:
         pass
 
     return False
+
+
+def _api_worker_declarations() -> list[tuple[str, str]]:
+    """Read environment counts and explicit worker arguments of Uvicorn CLI.
+
+    Spawned Uvicorn CLI workers inherit sys.argv. This does not discover
+    programmatic uvicorn.run(), custom launchers, or independent replicas.
+    """
+    declarations = [
+        (name, os.getenv(name) or "")
+        for name in ("WEB_CONCURRENCY", "UVICORN_WORKERS")
+    ]
+    if not sys.argv:
+        return declarations
+    launcher = Path(sys.argv[0])
+    if launcher.name not in {"uvicorn", "uvicorn.exe"} and not (
+        launcher.name == "__main__.py" and launcher.parent.name == "uvicorn"
+    ):
+        return declarations
+    args = iter(sys.argv[1:])
+    for arg in args:
+        if arg == "--":
+            break
+        if arg == "--workers":
+            declarations.append(("uvicorn --workers", next(args, "")))
+        elif arg.startswith("--workers="):
+            declarations.append(("uvicorn --workers", arg.partition("=")[2]))
+    return declarations
 
 
 def run_startup_config_validation(
@@ -119,11 +149,11 @@ def validate_startup_security_flags(*, logger: logging.Logger) -> None:
     public_api_base_url = (os.getenv("NEXT_PUBLIC_VERITAS_API_BASE_URL") or "").strip()
 
     # Redis auth state does not share the emergency halt controller's memory.
-    # Inspect both declared counts independently so one malformed value cannot
-    # hide an explicit multi-worker setting in the other variable.
-    for worker_var in ("WEB_CONCURRENCY", "UVICORN_WORKERS"):
+    # Inspect each declaration independently: an env value of one must not
+    # hide multiple workers explicitly requested through the Uvicorn CLI.
+    for worker_var, raw_count in _api_worker_declarations():
         try:
-            worker_count = int((os.getenv(worker_var) or "").strip())
+            worker_count = int(raw_count.strip())
         except ValueError:
             continue
         if worker_count <= 1:
