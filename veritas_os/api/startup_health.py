@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import multiprocessing
 import os
 import sys
 from pathlib import Path
@@ -122,6 +123,8 @@ def validate_startup_security_flags(*, logger: logging.Logger) -> None:
     Security policy:
     - Declared multiple API workers are refused in production/strict mode
       because emergency halt state is process-local, even with Redis auth.
+    - Multiprocessing children and Gunicorn-marked runtimes are refused in
+      strict mode when a single API process cannot be established.
     - `VERITAS_AUTH_ALLOW_FAIL_OPEN=true` must never be present in production.
     - `VERITAS_AUTH_STORE_FAILURE_MODE=open` must also be surfaced explicitly so
       operators can see the effective fail-open request during startup.
@@ -147,6 +150,25 @@ def validate_startup_security_flags(*, logger: logging.Logger) -> None:
     direct_fuji_key_present = _is_env_key_present("VERITAS_ENABLE_DIRECT_FUJI_API")
     direct_fuji_enabled = _is_truthy_env("VERITAS_ENABLE_DIRECT_FUJI_API")
     public_api_base_url = (os.getenv("NEXT_PUBLIC_VERITAS_API_BASE_URL") or "").strip()
+
+    # Programmatic Uvicorn workers have no CLI count, but Python exposes their
+    # multiprocessing parent. Gunicorn uses os.fork() and marks its workers
+    # through SERVER_SOFTWARE instead. Neither signal proves a worker count;
+    # refuse these contexts conservatively, including a single managed child.
+    managed_runtime = None
+    if multiprocessing.parent_process() is not None:
+        managed_runtime = "multiprocessing child"
+    elif (os.getenv("SERVER_SOFTWARE") or "").strip().lower().startswith("gunicorn/"):
+        managed_runtime = "Gunicorn-marked runtime"
+    if managed_runtime is not None:
+        message = (
+            "[SECURITY] The process-local emergency halt cannot establish a "
+            f"single API process in a {managed_runtime}. Run the API as one "
+            "standalone process until shared halt control is implemented."
+        )
+        if is_production:
+            raise RuntimeError(f"{message} Refusing startup in production/strict mode.")
+        logger.warning("%s", message)
 
     # Redis auth state does not share the emergency halt controller's memory.
     # Inspect each declaration independently: an env value of one must not

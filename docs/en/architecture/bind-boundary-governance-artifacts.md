@@ -92,10 +92,20 @@ cannot hide an explicit CLI count greater than one. Non-strict deployments emit
 a warning. Set both declared counts to one and run a single API process for this bounded halt
 behavior; Redis shares authentication state, not halt/resume state.
 
-This guard inspects declared environment counts and standard Uvicorn CLI worker
-arguments at startup. It does not detect programmatic `uvicorn.run()` worker
-configuration, custom launchers, Gunicorn configuration, independent replicas,
-or additional hosts, and it does not make restart recovery durable.
+The guard also refuses strict startup in Python multiprocessing child processes
+and runtimes marked by the standard Gunicorn `SERVER_SOFTWARE=gunicorn/...`
+environment value. Programmatic `uvicorn.run(workers=2)` uses multiprocessing
+children even without a CLI declaration; standard Gunicorn workers carry the
+marker even when the worker count comes from a configuration file. Non-strict
+profiles warn. These signals do not prove a worker count, so strict startup
+refuses even one managed child or one Gunicorn-marked worker. Run the API as
+one standalone process; no bypass flag is provided.
+
+The checks do not establish shared halt state. Custom launchers that do not
+expose these signals, independent replicas, and additional hosts remain outside
+detection, and restart recovery is not durable. Gunicorn detection depends on
+its standard environment marker being preserved; it is not an independent
+operating-system process inventory.
 Operators must keep the actual process topology consistent with the declared
 single-process configuration.
 
