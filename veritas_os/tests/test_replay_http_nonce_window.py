@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import os
 from types import SimpleNamespace
 
 import pytest
@@ -26,6 +27,10 @@ def replay_http(monkeypatch):
     monkeypatch.setenv("VERITAS_API_KEY", KEY)
     monkeypatch.delenv("VERITAS_API_KEYS", raising=False)
     monkeypatch.setenv("VERITAS_ENV", "production")
+    # This fixture isolates HMAC/nonce behavior after completed startup.
+    # Startup admission itself is covered by test_security_startup_admission.
+    monkeypatch.setattr(server.app.state, "security_startup_complete", True, raising=False)
+    monkeypatch.setattr(server.app.state, "security_startup_pid", os.getpid(), raising=False)
     monkeypatch.setenv("VERITAS_AUTH_STORE_FAILURE_MODE", "closed")
     monkeypatch.setattr(server, "API_KEY_DEFAULT", KEY)
     monkeypatch.setattr(server, "API_SECRET", SECRET)

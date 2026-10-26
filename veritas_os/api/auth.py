@@ -769,6 +769,7 @@ def require_permission(permission: Permission):
                 detail="Invalid API key",
             ) from None
 
+        _require_security_startup(request)
         allowed = ROLE_PERMISSIONS.get(role, frozenset())
         if permission not in allowed:
             _record_auth_reject_reason("insufficient_permission")
@@ -895,8 +896,24 @@ def require_api_key(
         _record_auth_reject_reason("api_key_invalid")
         _enforce_auth_failure_rate_limit(client_ip)
         raise HTTPException(status_code=401, detail="Invalid API key")
+    _require_security_startup(request)
     _bind_authenticated_principal(request, x_api_key)
     return True
+
+
+def _require_security_startup(request: Optional[Request]) -> None:
+    """Enforce strict lifespan readiness after HTTP credential validation.
+
+    Legacy direct calls without a request remain internal helper calls; FastAPI
+    injects the real Request for HTTP dependencies.
+    """
+    if request is None:
+        return
+    from veritas_os.api.startup_health import security_startup_is_complete
+
+    app = getattr(request, "scope", {}).get("app")
+    if not security_startup_is_complete(app):
+        raise HTTPException(status_code=503, detail="API security startup incomplete")
 
 
 def _derive_api_user_id(x_api_key: Optional[str]) -> str:
@@ -991,6 +1008,7 @@ def require_api_key_header_or_query(
         _record_auth_reject_reason("api_key_invalid")
         _enforce_auth_failure_rate_limit(client_ip)
         raise HTTPException(status_code=401, detail="Invalid API key")
+    _require_security_startup(request)
     _bind_authenticated_principal(request, candidate)
     return True
 
