@@ -132,6 +132,13 @@ and reason `security_startup_incomplete`, before acceptance or event-hub
 registration. Production query-string credentials remain refused. This is an
 admission check; it does not terminate already accepted WebSocket streams.
 
+The TrustLog stream concurrently watches ASGI disconnect messages and sends
+queued events. Disconnect, handler cancellation, or send failure cancels and
+awaits both connection tasks and unregisters the subscriber. Event reads are
+nonblocking, with a 100 ms idle poll and the existing 15 second heartbeat; no
+blocking queue reader is left in the thread pool. This covers observable ASGI
+disconnects, not independent detection of a silent network partition.
+
 Startup rejects declared multi-worker API deployments in production/strict
 profiles while this controller remains process-local. Either `WEB_CONCURRENCY`
 or `UVICORN_WORKERS` greater than one triggers refusal, including when Redis
