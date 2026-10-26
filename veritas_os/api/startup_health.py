@@ -117,6 +117,23 @@ def run_startup_config_validation(
             raise
 
 
+def initialize_system_halt_on_startup() -> None:
+    """Require explicit operator resume after each strict API startup.
+
+    This re-arms a process-local stop; it does not restore historical state.
+    Preserve a halt already set in this process, including its original reason.
+    """
+    if not should_fail_fast_startup():
+        return
+    from veritas_os.core.eu_ai_act_oversight import SystemHaltController
+
+    if not SystemHaltController.is_halted():
+        SystemHaltController.halt(
+            reason="Strict API startup requires an authenticated operator resume",
+            operator="system:startup",
+        )
+
+
 def validate_startup_security_flags(*, logger: logging.Logger) -> None:
     """Validate high-risk startup flags so dangerous configs are never silent.
 

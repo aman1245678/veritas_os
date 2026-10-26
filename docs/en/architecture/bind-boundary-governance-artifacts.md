@@ -82,6 +82,28 @@ does not cancel requests already admitted, stop other execution endpoints,
 persist a halt across restarts, or synchronize a halt across workers or hosts.
 Those guarantees require separate execution and deployment controls.
 
+### Strict startup requires explicit resume
+
+Each production/strict API lifespan starts with the decision controller halted,
+after startup validation and before background schedulers or request admission.
+`GET /v1/system/halt-status` reports the stop. An authorized operator must use
+`POST /v1/system/resume`; normal API authentication, `config_write` permission
+and current Bind adjudication still apply. A blocked resume keeps the stop.
+The health endpoint being available does not mean decisions are admitted.
+
+This deliberately requires resume after every strict startup, including a clean
+restart of a previously running instance. It prevents a restart from silently
+reopening decision admission without adding a new storage backend. The startup
+actor is `system:startup`. An existing in-process stop retains its reason and
+actor; a fresh process does not recover the previous actor, timestamp or reason.
+This is fail-closed initialization, not durable halt history or cross-host stop
+coordination. Non-strict startup keeps the existing state and defaults.
+
+Controlled secure proof fixtures perform the resume through the real HTTP/Bind
+management route using a separate synthetic admin credential. The decision
+credential retains its operator role. This fixture step is not evidence of an
+independently authenticated human approval.
+
 Startup rejects declared multi-worker API deployments in production/strict
 profiles while this controller remains process-local. Either `WEB_CONCURRENCY`
 or `UVICORN_WORKERS` greater than one triggers refusal, including when Redis
