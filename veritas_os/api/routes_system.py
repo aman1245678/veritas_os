@@ -698,18 +698,39 @@ async def trustlog_ws(websocket: WebSocket):
         "trustlog.appended",
         "compliance.pending_review",
     }
-    try:
+    async def _send_events() -> None:
+        heartbeat_at = time.monotonic() + 15
         while True:
             try:
-                item = await asyncio.to_thread(subscriber.get, timeout=15)
+                item = subscriber.get_nowait()
             except queue.Empty:
-                await websocket.send_json({"type": "heartbeat", "ts": srv.utc_now_iso_z()})
+                if time.monotonic() >= heartbeat_at:
+                    await websocket.send_json({"type": "heartbeat", "ts": srv.utc_now_iso_z()})
+                    heartbeat_at = time.monotonic() + 15
+                # Do not leave a blocking queue reader in the thread pool on cancellation.
+                await asyncio.sleep(0.1)
                 continue
             if item.get("type") in allowed_types:
                 await websocket.send_json(item)
+                heartbeat_at = time.monotonic() + 15
+
+    async def _receive_disconnect() -> None:
+        while True:
+            message = await websocket.receive()
+            if message["type"] == "websocket.disconnect":
+                return
+
+    tasks = [asyncio.create_task(_send_events()), asyncio.create_task(_receive_disconnect())]
+    try:
+        done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+        for task in done:
+            task.result()
     except WebSocketDisconnect:
         logger.debug("trustlog ws disconnected")
     finally:
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
         srv._event_hub.unregister(subscriber)
 
 

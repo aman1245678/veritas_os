@@ -20,7 +20,7 @@ def ws_app(monkeypatch):
     monkeypatch.setattr(server.app.state, "security_startup_pid", os.getpid(), raising=False)
     hub = Mock()
     event = {"type": "trustlog.appended", "payload": {"test": True}}
-    hub.register.return_value.get.side_effect = [event, WebSocketDisconnect()]
+    hub.register.return_value.get_nowait.side_effect = [event, WebSocketDisconnect()]
     monkeypatch.setattr(server, "_event_hub", hub)
     # Clients below intentionally skip lifespan and control admission state here.
     return server.app, hub, event
