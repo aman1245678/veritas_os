@@ -1,8 +1,10 @@
 """Capture a real /v1/decide response in an isolated test interpreter.
 
 Only model output and cloud clients are controlled. Route, kernel, signed
-policy verification and CDA construction execute normally. This helper issues
-no execution authorization, human receipt, or adapter operation.
+policy verification and CDA construction execute normally. A separate synthetic
+admin credential performs the strict-startup resume through the real management
+Bind path. This helper issues no candidate execution authorization or human
+receipt, and does not execute the selected candidate.
 """
 
 from __future__ import annotations

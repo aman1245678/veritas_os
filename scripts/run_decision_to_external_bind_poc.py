@@ -430,6 +430,9 @@ def _decide(
 
     observed = _observed_kernel_decide(decision_kernel.decide, counters)
     real_import_module = importlib.import_module
+    startup_api_key = "poc-startup-" + secrets.token_urlsafe(24)
+    api_keys = json.loads(os.environ["VERITAS_API_KEYS"])
+    api_keys.append({"key": startup_api_key, "role": "admin"})
 
     def controlled_import_module(
         name: str,
@@ -440,11 +443,22 @@ def _decide(
         return real_import_module(name, package)
 
     with (
+        patch.dict(os.environ, {"VERITAS_API_KEYS": json.dumps(api_keys)}),
         patch.object(llm_client, "chat", controlled_chat),
         patch.object(decision_kernel, "decide", observed),
         patch("importlib.import_module", side_effect=controlled_import_module),
     ):
         with TestClient(server.app) as client:
+            # Strict startup requires an authenticated Bind-controlled resume
+            # before decision admission; never clear controller state directly.
+            resumed = client.post(
+                "/v1/system/resume",
+                headers={"X-API-Key": startup_api_key},
+                json={"operator": "synthetic-startup-operator", "comment": "controlled proof startup"},
+            )
+            resumed.raise_for_status()
+            if resumed.json().get("bind_outcome") != "COMMITTED":
+                raise RuntimeError("Controlled proof startup resume did not commit")
             response = client.post(
                 "/v1/decide",
                 headers={"X-API-Key": os.environ["VERITAS_API_KEY"]},

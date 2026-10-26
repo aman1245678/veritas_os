@@ -68,6 +68,9 @@ async def run_lifespan(
     startup_validation()
     runtime_health_check()
     check_multiworker_auth_store()
+    from veritas_os.api.startup_health import initialize_system_halt_on_startup
+
+    initialize_system_halt_on_startup()
     start_nonce_cleanup_scheduler()
     start_rate_cleanup_scheduler()
 
