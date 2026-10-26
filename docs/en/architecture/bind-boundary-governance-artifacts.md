@@ -139,6 +139,12 @@ nonblocking, with a 100 ms idle poll and the existing 15 second heartbeat; no
 blocking queue reader is left in the thread pool. This covers observable ASGI
 disconnects, not independent detection of a silent network partition.
 
+SSE event reads also use nonblocking queue polling (100 ms while idle), so
+cancelling a stream does not leave a thread-pool reader waiting for the
+configured heartbeat timeout. The existing disconnect check and subscription
+cleanup remain in place; event frames, response headers and the configurable
+heartbeat interval are preserved. Idle event delivery may incur the poll delay.
+
 Startup rejects declared multi-worker API deployments in production/strict
 profiles while this controller remains process-local. Either `WEB_CONCURRENCY`
 or `UVICORN_WORKERS` greater than one triggers refusal, including when Redis

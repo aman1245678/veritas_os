@@ -657,14 +657,21 @@ async def events(request: Request, heartbeat_sec: int = Query(default=15, ge=5, 
     async def _stream():
         try:
             yield ": connected\n\n"
+            heartbeat_at = time.monotonic() + heartbeat_sec
             while True:
                 if await request.is_disconnected():
                     break
                 try:
-                    item = await asyncio.to_thread(subscriber.get, timeout=heartbeat_sec)
-                    yield srv._format_sse_message(item)
+                    item = subscriber.get_nowait()
                 except queue.Empty:
-                    yield f": heartbeat {srv.utc_now_iso_z()}\n\n"
+                    if time.monotonic() >= heartbeat_at:
+                        yield f": heartbeat {srv.utc_now_iso_z()}\n\n"
+                        heartbeat_at = time.monotonic() + heartbeat_sec
+                    # Cancellation must not leave a blocking reader in the thread pool.
+                    await asyncio.sleep(0.1)
+                    continue
+                yield srv._format_sse_message(item)
+                heartbeat_at = time.monotonic() + heartbeat_sec
         finally:
             srv._event_hub.unregister(subscriber)
 
