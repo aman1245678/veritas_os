@@ -37,6 +37,8 @@ async def run_lifespan(
     import veritas_os.api.middleware as middleware
     import veritas_os.api.server as server
 
+    app.state.security_startup_complete = False
+    app.state.security_startup_pid = None
     middleware._shutting_down = False
     middleware._inflight_count = 0
     server._shutting_down = False
@@ -73,10 +75,14 @@ async def run_lifespan(
     initialize_system_halt_on_startup()
     start_nonce_cleanup_scheduler()
     start_rate_cleanup_scheduler()
+    app.state.security_startup_pid = os.getpid()
+    app.state.security_startup_complete = True
 
     try:
         yield
     finally:
+        app.state.security_startup_complete = False
+        app.state.security_startup_pid = None
         middleware._shutting_down = True
         server._shutting_down = True
 

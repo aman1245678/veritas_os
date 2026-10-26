@@ -104,6 +104,27 @@ management route using a separate synthetic admin credential. The decision
 credential retains its operator role. This fixture step is not evidence of an
 independently authenticated human approval.
 
+### Authenticated HTTP admission requires startup completion
+
+In production/strict profiles, valid HTTP credentials alone do not permit API
+operations. The API lifespan clears an app-local completion marker on entry,
+sets it to the literal boolean `True` with the current process ID only after
+validation, backend setup, halt initialization and scheduler startup succeed,
+and clears both values on shutdown. A marker inherited from another process
+does not establish startup completion for the current process.
+API-key, permission and SSE authentication dependencies return HTTP 503 after
+credential validation when the marker is absent or incomplete. Invalid
+credentials retain their authentication refusal; public health routes remain
+available and are not proof of protected API readiness.
+
+This closes protected HTTP admission when startup is skipped, including
+Uvicorn `--lifespan off`, and when initialization fails or the API shuts down.
+It does not make a server with disabled lifespan exit automatically, terminate
+already admitted work, attest a different process or host, or extend this check
+to WebSocket admission. Direct trusted helper calls without an HTTP Request
+retain their compatibility behavior; normal FastAPI dependencies receive the
+actual Request. Non-strict profiles retain their existing behavior.
+
 Startup rejects declared multi-worker API deployments in production/strict
 profiles while this controller remains process-local. Either `WEB_CONCURRENCY`
 or `UVICORN_WORKERS` greater than one triggers refusal, including when Redis

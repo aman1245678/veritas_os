@@ -319,6 +319,9 @@ def test_real_redis_http_nonce_covers_signature_window(real_redis, monkeypatch, 
     monkeypatch.delenv("VERITAS_API_KEYS", raising=False)
     monkeypatch.setenv("VERITAS_ENV", "production")
     monkeypatch.setattr(server, "API_KEY_DEFAULT", key)
+    # This real-Redis HTTP test isolates nonce retention after startup.
+    monkeypatch.setattr(server.app.state, "security_startup_complete", True, raising=False)
+    monkeypatch.setattr(server.app.state, "security_startup_pid", os.getpid(), raising=False)
     monkeypatch.setattr(server, "API_SECRET", secret)
     monkeypatch.setattr(server, "_AUTH_SECURITY_STORE", auth.RedisAuthSecurityStore(redis_client))
     monkeypatch.setattr(auth.time, "time", lambda: float(now))

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 
 import pytest
 
@@ -17,11 +18,13 @@ def test_run_lifespan_calls_start_and_stop_in_order(monkeypatch):
 
     monkeypatch.setattr(middleware, "_inflight_count", 0)
     monkeypatch.setattr(server, "_inflight_count", 0)
+    monkeypatch.setattr(server.app.state, "security_startup_complete", None, raising=False)
 
     calls: list[str] = []
 
     def _push(name: str):
         def _inner() -> None:
+            assert server.app.state.security_startup_complete is False
             calls.append(name)
 
         return _inner
@@ -39,7 +42,11 @@ def test_run_lifespan_calls_start_and_stop_in_order(monkeypatch):
             close_llm_pool=_push("close_pool"),
             logger=logging.getLogger(__name__),
         ):
+            assert server.app.state.security_startup_complete is True
+            assert server.app.state.security_startup_pid == os.getpid()
             calls.append("inside")
+        assert server.app.state.security_startup_complete is False
+        assert server.app.state.security_startup_pid is None
 
     asyncio.run(_exercise())
 
@@ -59,6 +66,7 @@ def test_run_lifespan_calls_start_and_stop_in_order(monkeypatch):
 def test_run_lifespan_fails_fast_before_scheduler_start(monkeypatch):
     """Startup failures must abort lifespan before scheduler startup."""
     import veritas_os.api.server as server
+    monkeypatch.setattr(server.app.state, "security_startup_complete", True, raising=False)
 
     calls: list[str] = []
 
@@ -88,3 +96,4 @@ def test_run_lifespan_fails_fast_before_scheduler_start(monkeypatch):
         asyncio.run(_exercise())
 
     assert calls == ["validate"]
+    assert server.app.state.security_startup_complete is False

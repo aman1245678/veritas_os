@@ -7,7 +7,7 @@ import multiprocessing
 import os
 import sys
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Any, Callable, Optional
 
 from veritas_os.security.trustlog_production_posture import (
     STRICT_PRODUCTION_POSTURE_ALIASES,
@@ -132,6 +132,19 @@ def initialize_system_halt_on_startup() -> None:
             reason="Strict API startup requires an authenticated operator resume",
             operator="system:startup",
         )
+
+
+def security_startup_is_complete(app: Any) -> bool:
+    """Refuse strict API admission until this app's lifespan has completed setup."""
+    if not should_fail_fast_startup():
+        return True
+    state = getattr(app, "state", None)
+    pid = getattr(state, "security_startup_pid", None)
+    return (
+        getattr(state, "security_startup_complete", False) is True
+        and isinstance(pid, int) and not isinstance(pid, bool)
+        and pid == os.getpid()
+    )
 
 
 def validate_startup_security_flags(*, logger: logging.Logger) -> None:
