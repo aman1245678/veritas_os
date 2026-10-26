@@ -40,6 +40,7 @@ jobs:
         uses: aquasecurity/trivy-action@0.35.0
         with:
           input: ${{ runner.temp }}/veritas-image
+          cache-dir: ${{ github.workspace }}/.cache/trivy
           format: sarif
           output: trivy-results.sarif
           scanners: vuln
@@ -48,6 +49,7 @@ jobs:
           exit-code: '0'
       - name: Exercise real scan and digest-preserving local copy
         env:
+          TRIVY_CACHE_DIR: ${{ github.workspace }}/.cache/trivy
           TESTED_SHA: ${{ github.sha }}
         run: |
           test "$(git rev-parse HEAD)" = "$TESTED_SHA"

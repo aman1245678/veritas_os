@@ -49,6 +49,7 @@ jobs:
         uses: aquasecurity/trivy-action@0.35.0
         with:
           input: ${{ runner.temp }}/veritas-image
+          cache-dir: ${{ github.workspace }}/.cache/trivy
           format: sarif
           output: trivy-results.sarif
           scanners: vuln
@@ -66,6 +67,7 @@ jobs:
 
       - name: Scan and publish the same OCI layout
         env:
+          TRIVY_CACHE_DIR: ${{ github.workspace }}/.cache/trivy
           IMAGE_NAME: ${{ steps.image.outputs.name }}
           TESTED_SHA: ${{ github.sha }}
           EVENT_REF: ${{ github.ref }}

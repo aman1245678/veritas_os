@@ -10,6 +10,15 @@ ignore unfixed findings, exit code 1 on matching findings. Scanner errors also
 stop the script. No registry copy runs before successful scanner completion.
 The informational HIGH/CRITICAL SARIF report remains separate from this gate.
 
+Both scans explicitly use the same `${{ github.workspace }}/.cache/trivy`
+directory: the advisory action receives `cache-dir`, and the final shell step
+receives `TRIVY_CACHE_DIR`. This lets the publication gate reuse the vulnerability
+database prepared by the advisory scan instead of consulting an unrelated default
+cache and attempting another download. Trivy still applies its normal database
+freshness checks; database updates are not disabled. A database download or
+scanner failure still stops publication. The PR workflow uses the same wiring
+and verifies only a local OCI copy.
+
 After success, the script checks the layout hash before each copy. Skopeo copies
 all manifests with `--all --preserve-digests`, including the attestations, and
 checks the resulting digest. There is no rebuild between inspection and copying.

@@ -137,3 +137,15 @@ def test_layout_symlink_never_scans_or_copies(tmp_path):
     assert "symlinks" in result.stderr
     assert not any(call[0] == "trivy" for call in calls)
     assert copies == []
+
+
+@pytest.mark.parametrize("workflow_name", ["publish-ghcr.yml", "image-publication-pr.yml"])
+def test_advisory_and_publication_scans_share_the_same_cache(workflow_name):
+    """The gate must reuse the DB cache populated by the advisory action."""
+    workflow = yaml.safe_load((ROOT / ".github/workflows" / workflow_name).read_text())
+    steps = next(iter(workflow["jobs"].values()))["steps"]
+    advisory = next(s for s in steps if s.get("uses", "").startswith("aquasecurity/trivy-action@"))
+    gate = next(s for s in steps if "bash scripts/ci/publish_scanned_oci.sh" in s.get("run", ""))
+    assert advisory["with"].get("cache-dir")
+    assert gate.get("env", {}).get("TRIVY_CACHE_DIR") == advisory["with"]["cache-dir"]
+    assert "TRIVY_SKIP_DB_UPDATE" not in gate.get("env", {})
